@@ -12,3 +12,6 @@ rusqlite = "0.32.1"
 spade = "2.13.1"
 walkdir = "2.5.0"
 maptile = { path = "../maptile" }
+
+[profile.release]
+panic = "abort"
