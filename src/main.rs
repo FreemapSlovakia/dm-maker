@@ -1,15 +1,17 @@
-use las::{point::Classification, Reader};
+mod index;
+
+use image::{RgbImage, codecs::jpeg::JpegEncoder};
+use las::{Reader, point::Classification};
+use maptile::{bbox::BBox, constants::WEB_MERCATOR_EXTENT, utils::bbox_covered_tiles};
 use proj::Proj;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use rusqlite::Connection;
+use spade::{DelaunayTriangulation, HasPosition, Point2, Triangulation};
 use std::{
-    f64,
     fs::File,
-    ops::DerefMut,
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    io::{Write, stdout},
+    sync::{Mutex, atomic::AtomicU64},
 };
-use tiff::encoder::{colortype::Gray64Float, compression::Lzw, TiffEncoder};
-use walkdir::WalkDir;
 
 fn main() {
     render();
@@ -17,15 +19,50 @@ fn main() {
     // index();
 }
 
+struct PointWithHeight {
+    position: Point2<f64>,
+    height: f64,
+}
+
+impl HasPosition for PointWithHeight {
+    type Scalar = f64;
+
+    fn position(&self) -> Point2<f64> {
+        self.position
+    }
+}
+
 fn render() {
     let proj_3857_to_8353 = Proj::new_known_crs("EPSG:3857", "EPSG:8353", None)
         .expect("Failed to create PROJ transformation");
 
-    let (min_x, min_y, max_x, max_y) = (2272613_f64, 6205250_f64, 2275920_f64, 6208041_f64);
+    // let bbox_3857 = BBox::new(2273080.0, 6204962.0, 2273494.0, 6205186.0);
+    let bbox_3857 = BBox::new(2272240.0, 6203413.0, 2274969.0, 6205873.0); // BIG
 
-    let bbox_8353 = proj_3857_to_8353
-        .transform_bounds(min_x, min_y, max_x, max_y, 11)
-        .unwrap();
+    let zoom = 20;
+
+    let tile_size = 256;
+
+    let tiles: Vec<_> = bbox_covered_tiles(&bbox_3857, zoom)
+        .map(|f| {
+            (
+                f,
+                f.bounds(tile_size),
+                Mutex::new(Vec::<PointWithHeight>::new()),
+            )
+        })
+        .collect();
+
+    let bbox_8353: BBox = proj_3857_to_8353
+        .transform_bounds(
+            bbox_3857.min_x,
+            bbox_3857.min_y,
+            bbox_3857.max_x,
+            bbox_3857.max_y,
+            11,
+        )
+        .unwrap()
+        .into();
 
     let conn = Connection::open("index.sqlite").unwrap();
 
@@ -34,16 +71,12 @@ fn render() {
     let mut stmt = conn.prepare("SELECT file FROM laz_index WHERE max_x >= ?1 AND min_x <= ?3 AND max_y >= ?2 AND min_y <= ?4").unwrap();
 
     let rows = stmt
-        .query_map(bbox_8353, |row| row.get::<_, String>(0))
+        .query_map(<[f64; 4]>::from(bbox_8353), |row| row.get::<_, String>(0))
         .unwrap();
-
-    let dt = Arc::new(Mutex::new(startin::Triangulation::new()));
 
     let files: Vec<String> = rows.map(|row| row.unwrap()).collect();
 
     println!("Reading {} files", files.len());
-
-    let dt_clone = Arc::clone(&dt);
 
     let count = AtomicU64::new(0);
 
@@ -53,7 +86,7 @@ fn render() {
                 .expect("Failed to create PROJ transformation")
         },
         |proj, file| {
-            println!("Reading {file}");
+            println!("READ {file}");
 
             let mut reader = Reader::from_path(file).unwrap();
 
@@ -62,37 +95,57 @@ fn render() {
             for point in reader.points() {
                 let point = point.unwrap();
 
-                if point.classification == Classification::Ground {
-                    let (x, y) = proj.convert((point.x, point.y)).unwrap();
+                if point.classification != Classification::Ground {
+                    continue;
+                }
 
-                    if x > min_x && y > min_y && x < max_x && y < max_y {
-                        count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if !bbox_8353.contains(point.x, point.y) {
+                    continue;
+                }
 
-                        let _ = dt.lock().unwrap().insert_one_pt(x, y, point.z);
+                let (x, y) = proj.convert((point.x, point.y)).unwrap();
 
-                        // batch.push([x, y, point.z]);
+                if !bbox_3857.contains(x, y) {
+                    continue;
+                }
 
-                        // if batch.len() > 1000000 {
-                        //     print!(".");
-                        //     stdout().flush().unwrap();
+                if count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 1_000_000 == 0 {
+                    print!(".");
+                    stdout().flush().unwrap();
+                }
 
-                        //     let _ = dt
-                        //         .lock()
-                        //         .unwrap()
-                        //         .insert(&batch, startin::InsertionStrategy::BBox);
-
-                        //     batch.clear();
-                        // }
+                for (i, tile) in tiles.iter().enumerate() {
+                    if tile.1.contains(x, y) {
+                        tiles
+                            .get(i)
+                            .unwrap()
+                            .2
+                            .lock()
+                            .unwrap()
+                            .push(PointWithHeight {
+                                position: Point2::new(x, y),
+                                height: point.z,
+                            });
                     }
                 }
+
+                // t.lock()
+                //     .unwrap()
+                //     .insert(PointWithHeight {
+                //         position: Point2::new(x, y),
+                //         height: point.z,
+                //     })
+                //     .unwrap();
             }
+
+            // println!("INSERT {} {file}", batch.len());
 
             // let _ = dt
             //     .lock()
             //     .unwrap()
             //     .insert(&batch, startin::InsertionStrategy::BBox);
 
-            println!("Done {file}");
+            println!("DONE {file}");
         },
     );
 
@@ -101,109 +154,117 @@ fn render() {
         count.fetch_add(0, std::sync::atomic::Ordering::Relaxed)
     );
 
-    let interpolant = startin::interpolation::NNI { precompute: true };
+    let pixels_per_meter = (((tile_size as u64) << zoom) as f64) / 2.0 / WEB_MERCATOR_EXTENT;
 
-    let mut coords = vec![];
+    tiles.into_par_iter().for_each(|tile| {
+        println!("Processing {:?}", tile.0);
 
-    let world_extent = 2.0 * f64::consts::PI * 6378137.0;
-    let zoom = 20;
+        let mut t = DelaunayTriangulation::<PointWithHeight>::new();
 
-    let pixels_per_meter = ((256 << zoom) as f64) / world_extent;
+        let points = tile.2.into_inner().unwrap();
 
-    let width_pixels = ((max_x - min_x) * pixels_per_meter).round() as u32;
-    let height_pixels = ((max_y - min_y) * pixels_per_meter).round() as u32;
-
-    println!("Interpolating {width_pixels}x{height_pixels}");
-
-    for y in 0..height_pixels {
-        let cy = min_y + y as f64 * (max_y - min_y) / height_pixels as f64;
-
-        for x in 0..width_pixels {
-            let cx = min_x + x as f64 * (max_x - min_x) / width_pixels as f64;
-
-            coords.push([cx, cy]);
+        for point in points {
+            t.insert(point).unwrap();
         }
-    }
 
-    let mut img = Vec::new();
+        let bbox_3857 = tile.1;
 
-    let mut dt = dt_clone.lock().unwrap();
+        let width_pixels = (bbox_3857.width() * pixels_per_meter).round() as u32;
+        let height_pixels = (bbox_3857.height() * pixels_per_meter).round() as u32;
 
-    let dt = dt.deref_mut();
+        println!("Interpolating {width_pixels}x{height_pixels}");
 
-    let zs = startin::interpolation::interpolate(&interpolant, dt, &coords);
+        let mut img = Vec::new();
 
-    for y in 0..height_pixels {
-        for x in 0..width_pixels {
-            let v = zs.get((x + y * width_pixels) as usize).unwrap().as_ref();
+        let nn = t.natural_neighbor();
 
-            if let Ok(v) = v {
-                img.push(*v);
-            } else {
-                img.push(f64::NAN);
+        for y in 0..height_pixels {
+            let cy = bbox_3857.min_y + y as f64 * bbox_3857.height() / height_pixels as f64;
+
+            for x in 0..width_pixels {
+                let cx = bbox_3857.min_x + x as f64 * bbox_3857.width() / width_pixels as f64;
+
+                let v = nn.interpolate(|v| v.data().height, Point2::new(cx, cy));
+
+                if let Some(v) = v {
+                    if v.is_nan() {
+                        println!("NAN {cx} {cy}")
+                    }
+
+                    img.push(v);
+                } else {
+                    img.push(f64::NAN);
+                }
             }
         }
-    }
 
-    let mut tif = TiffEncoder::new(File::create("out-nni.tif").unwrap()).unwrap();
+        let img = compute_hillshade(
+            img,
+            height_pixels as usize,
+            width_pixels as usize,
+            315.0,
+            45.0,
+        );
 
-    tif.write_image_with_compression::<Gray64Float, _>(
-        width_pixels,
-        height_pixels,
-        Lzw::default(),
-        &img,
-    )
-    .unwrap();
+        img.write_with_encoder(JpegEncoder::new(
+            File::create(format!("out-{}-{}.jpg", tile.0.x, tile.0.y)).unwrap(),
+        ))
+        .unwrap();
+    });
 }
 
-fn index() {
-    let conn = Connection::open("index.sqlite").unwrap();
+fn compute_hillshade(
+    elevation: Vec<f64>,
+    rows: usize,
+    cols: usize,
+    sun_azimuth: f64,
+    sun_zenith: f64,
+) -> RgbImage {
+    let mut hillshade = RgbImage::new(cols as u32, rows as u32);
 
-    conn.execute(
-        "CREATE TABLE laz_index (min_x NUMBER, max_x NUMBER, min_y NUMBER, max_y NUMBER, file VARCHAR)", ()
-    )
-    .unwrap();
+    let sun_azimuth_rad = sun_azimuth.to_radians();
+    let sun_zenith_rad = sun_zenith.to_radians();
 
-    let mut stmt = conn
-        .prepare("INSERT INTO laz_index VALUES (?1, ?2, ?3, ?4, ?5)")
-        .unwrap();
+    for y in 1..rows - 1 {
+        let off = y * cols;
 
-    for dir in WalkDir::new("/home/martin/18TB") {
-        let dir = dir.unwrap();
+        for x in 1..cols - 1 {
+            // Extract 3x3 window
+            let z1 = elevation[off - cols + x - 1];
+            let z2 = elevation[off - cols + x];
+            let z3 = elevation[off - cols + x + 1];
+            let z4 = elevation[off + x - 1];
+            // let z5 = elevation[off + x]; // Center pixel
+            let z6 = elevation[off + x + 1];
+            let z7 = elevation[off + cols + x - 1];
+            let z8 = elevation[off + cols + x];
+            let z9 = elevation[off + cols + x + 1];
 
-        println!("{}", dir.file_name().to_string_lossy());
+            // Compute partial derivatives (Horn method)
+            let dz_dx =
+                (-1.0 * z1 + 1.0 * z3 + -2.0 * z4 + 2.0 * z6 + -1.0 * z7 + 1.0 * z9) / 8.0 * 2.0;
 
-        if dir
-            .path()
-            .extension()
-            .map(|ext| ext == "laz")
-            .unwrap_or(false)
-        {
-            let reader = Reader::from_path(dir.path()).unwrap();
+            let dz_dy =
+                (-1.0 * z1 - 2.0 * z2 - 1.0 * z3 + 1.0 * z7 + 2.0 * z8 + 1.0 * z9) / 8.0 * 2.0;
 
-            let bounds = reader.header().bounds();
+            // Compute slope
+            let slope_rad = (dz_dx.powi(2) + dz_dy.powi(2)).sqrt().atan();
 
-            // println!("{:?}", header.bounds());
+            // Compute aspect
+            let mut aspect_rad = dz_dy.atan2(-dz_dx); // Negative sign because of coordinate convention
+            if aspect_rad < 0.0 {
+                aspect_rad += std::f64::consts::TAU; // Convert to 0 - 2π range
+            }
 
-            let _ = stmt
-                .execute((
-                    bounds.min.x,
-                    bounds.max.x,
-                    bounds.min.y,
-                    bounds.max.y,
-                    dir.path().to_string_lossy(),
-                ))
-                .unwrap();
+            // Compute illumination using sun angle
+            let illumination = sun_zenith_rad.cos() * slope_rad.cos()
+                + sun_zenith_rad.sin() * slope_rad.sin() * (sun_azimuth_rad - aspect_rad).cos();
+
+            // Scale to 0-255
+            let shade = (illumination * 255.0).clamp(0.0, 255.0) as u8;
+            hillshade.get_pixel_mut(x as u32, (rows - y) as u32).0 = [shade, shade, shade];
         }
     }
 
-    for query in [
-        "CREATE UNIQUE INDEX laz_file_unique ON laz_index (file)",
-        "CREATE INDEX laz_min_x_index ON laz_index (min_x)",
-        "CREATE INDEX laz_max_x_index ON laz_index (max_x)",
-        "CREATE INDEX laz_min_y_index ON laz_index (min_y)",
-        "CREATE INDEX laz_max_y_index ON laz_index (max_y)",
-    ] {
-        conn.execute(query, ()).unwrap();
-    }
+    hillshade
 }
