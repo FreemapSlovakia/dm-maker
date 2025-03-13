@@ -41,8 +41,8 @@ fn render() {
     let proj_3857_to_8353 = Proj::new_known_crs("EPSG:3857", "EPSG:8353", None)
         .expect("Failed to create PROJ transformation");
 
-    // let bbox_3857 = BBox::new(2273080.0, 6204962.0, 2273494.0, 6205186.0); // SMALL
-    let bbox_3857 = BBox::new(2272240.0, 6203413.0, 2274969.0, 6205873.0); // BIG
+    let bbox_3857 = BBox::new(2273080.0, 6204962.0, 2273494.0, 6205186.0); // SMALL
+    // let bbox_3857 = BBox::new(2272240.0, 6203413.0, 2274969.0, 6205873.0); // BIG
     // let bbox_3857 = BBox::new(2269316.0, 6199572.0, 2279288.0, 6218237.0); // Plesivecka
 
     let zoom = 20;
@@ -146,7 +146,7 @@ fn render() {
             ("minzoom", "20"),
             ("maxzoom", "20"),
             ("format", "jpeg"),
-            // ("bounds")
+            // ("bounds", ...TODO)
         ],
     )
     .unwrap();
@@ -199,12 +199,35 @@ fn render() {
             }
         }
 
+        // let sun_azimuth_rad = 315_f64.to_radians();
+        // let sun_zenith_rad = 45_f64.to_radians();
+
         let img = compute_hillshade(
             img,
             height_pixels as usize,
             width_pixels as usize,
-            315.0,
-            45.0,
+            |aspect_rad, slope_rad| {
+                igor_rgb(
+                    aspect_rad,
+                    slope_rad,
+                    &[
+                        (-120.0, 0.8, 0x203060),
+                        (60.0, 0.7, 0xFFEE00),
+                        (-45.0, 1.0, 0x000000),
+                    ],
+                    1.0,
+                    0.0,
+                )
+
+                // // Compute illumination using sun angle
+                // let illumination = sun_zenith_rad.cos() * slope_rad.cos()
+                //     + sun_zenith_rad.sin() * slope_rad.sin() * (sun_azimuth_rad - aspect_rad).cos();
+
+                // // Scale to 0-255
+                // let shade = (illumination * 255.0).clamp(0.0, 255.0) as u8;
+
+                // [shade, shade, shade]
+            },
         );
 
         let img = crop_imm(
@@ -248,12 +271,12 @@ fn compute_slope_and_aspect(elevation: &[f64], cols: usize, x: usize, y: usize) 
     let z9 = elevation[off + cols + x + 1];
 
     // Compute partial derivatives (Horn method)
-    let dz_dx = (-1.0 * z1 + 1.0 * z3 + -2.0 * z4 + 2.0 * z6 + -1.0 * z7 + 1.0 * z9) / 8.0 * 1.7;
+    let dz_dx = (-z1 + z3 - 2.0 * z4 + 2.0 * z6 - z7 + z9) / 8.0 * 1.7;
 
-    let dz_dy = (-1.0 * z1 - 2.0 * z2 - 1.0 * z3 + 1.0 * z7 + 2.0 * z8 + 1.0 * z9) / 8.0 * 1.7;
+    let dz_dy = (-z1 - 2.0 * z2 - z3 + z7 + 2.0 * z8 + z9) / 8.0 * 1.7;
 
     // Compute slope
-    let mut slope_rad = (dz_dx.powi(2) + dz_dy.powi(2)).sqrt().atan();
+    let mut slope_rad = dz_dx.hypot(dz_dy).atan();
 
     // Compute aspect
     let mut aspect_rad = dz_dy.atan2(-dz_dx); // Negative sign because of coordinate convention
@@ -270,80 +293,84 @@ fn compute_slope_and_aspect(elevation: &[f64], cols: usize, x: usize, y: usize) 
     (slope_rad, aspect_rad)
 }
 
-fn compute_hillshade(
-    elevation: Vec<f64>,
-    rows: usize,
-    cols: usize,
-    sun_azimuth: f64,
-    sun_zenith: f64,
-) -> RgbImage {
+fn compute_hillshade<F>(elevation: Vec<f64>, rows: usize, cols: usize, compute_rgb: F) -> RgbImage
+where
+    F: Fn(f64, f64) -> [u8; 3],
+{
     let mut hillshade = RgbImage::new(cols as u32, rows as u32);
-
-    let sun_azimuth_rad = sun_azimuth.to_radians();
-    let sun_zenith_rad = sun_zenith.to_radians();
 
     for y in 1..rows - 1 {
         for x in 1..cols - 1 {
             let (slope_rad, aspect_rad) = compute_slope_and_aspect(&elevation, cols, x, y);
 
-            let igor = |az: f64| {
-                let aspect_diff = difference_between_angles(
-                    aspect_rad,
-                    f64::consts::PI * 1.5 - az.to_radians(),
-                    f64::consts::PI * 2.0,
-                );
-
-                let aspect_strength = 1.0 - aspect_diff / f64::consts::PI;
-
-                1.0 - slope_rad * 2.0 * aspect_strength
-            };
-
-            // // Compute illumination using sun angle
-            // let illumination = sun_zenith_rad.cos() * slope_rad.cos()
-            //     + sun_zenith_rad.sin() * slope_rad.sin() * (sun_azimuth_rad - aspect_rad).cos();
-
-            // // Scale to 0-255
-            // let shade = (illumination * 255.0).clamp(0.0, 255.0) as u8;
-
             hillshade.get_pixel_mut(x as u32, (rows - y) as u32).0 =
-                igor_rgb(igor(-120.0), igor(60.0), igor(-45.0), 1.0, 0.0);
+                compute_rgb(aspect_rad, slope_rad);
+
+            igor_rgb(
+                aspect_rad,
+                slope_rad,
+                &[
+                    (-120.0, 0.8, 0x203060),
+                    (60.0, 0.7, 0xFFEE00),
+                    (-45.0, 1.0, 0x000000),
+                ],
+                1.0,
+                0.0,
+            );
         }
     }
 
     hillshade
 }
 
-fn igor_rgb(a: f64, b: f64, c: f64, contrast: f64, brightness: f64) -> [u8; 3] {
-    // Compute modified hillshade values
-    let a_mod = 0.8 * (1.0 - a);
-    let b_mod = 0.7 * (1.0 - b);
-    let c_mod = 1.0 * (1.0 - c);
+fn igor_rgb(
+    aspect_rad: f64,
+    slope_rad: f64,
+    params: &[(f64, f64, u32)],
+    contrast: f64,
+    brightness: f64,
+) -> [u8; 3] {
+    let igor = |az: f64| {
+        let aspect_diff = difference_between_angles(
+            aspect_rad,
+            f64::consts::PI * 1.5 - az.to_radians(),
+            f64::consts::PI * 2.0,
+        );
 
-    // Normalization factor
-    let norm = 0.001 + a_mod + b_mod + c_mod;
+        let aspect_strength = 1.0 - aspect_diff / f64::consts::PI;
 
-    // RGB coefficients from Makefile
-    let color_r = (0x20 as f64, 0xFF as f64, 0x00 as f64);
-    let color_g = (0x30 as f64, 0xEE as f64, 0x00 as f64);
-    let color_b = (0x60 as f64, 0x00 as f64, 0x00 as f64);
-
-    let alpha = 1.0 - ((1.0 - a_mod) * (1.0 - b_mod) * (1.0 - c_mod));
-
-    // Compute each channel
-    let compute_channel = |c_a, c_b, c_c| {
-        let x = contrast
-            * (((a_mod * c_a / 255.0 + b_mod * c_b / 255.0 + c_mod * c_c / 255.0) / norm) - 0.5)
-            + 0.5
-            + brightness;
-
-        let x = x + (1.0 - x) * (1.0 - alpha);
-
-        (x as f64 * 255.0).clamp(0.0, 255.0) as u8
+        1.0 - slope_rad * 2.0 * aspect_strength
     };
 
-    let r = compute_channel(color_r.0, color_r.1, color_r.2);
-    let g = compute_channel(color_g.0, color_g.1, color_g.2);
-    let b = compute_channel(color_b.0, color_b.1, color_b.2);
+    // Compute modified hillshade values
+    let mods: Vec<_> = params
+        .iter()
+        .map(|param| param.1 * (1.0 - igor(param.0)))
+        .collect();
+
+    // Normalization factor
+    let norm = f64::MIN_POSITIVE + mods.iter().sum::<f64>();
+
+    let alpha = 1.0 - mods.iter().map(|m| 1.0 - m).product::<f64>();
+
+    // Compute each channel
+    let compute_channel = |shift| {
+        let sum: f64 = mods
+            .iter()
+            .enumerate()
+            .map(|(i, m)| m * f64::from((params[i].2 >> shift) & 0xFF_u32) / 255.0)
+            .sum();
+
+        let value = contrast * ((sum / norm) - 0.5) + 0.5 + brightness;
+
+        let value = value + (1.0 - value) * (1.0 - alpha);
+
+        (value * 255.0).clamp(0.0, 255.0) as u8
+    };
+
+    let r = compute_channel(16);
+    let g = compute_channel(8);
+    let b = compute_channel(0);
 
     [r, g, b]
 }
