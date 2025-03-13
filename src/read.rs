@@ -1,35 +1,41 @@
-use crate::shared_types::{PointWithHeight, TileMeta};
+use crate::{
+    params::Params,
+    shared_types::{PointWithHeight, TileMeta},
+};
 use core::f64;
 use las::{Reader, point::Classification};
-use maptile::{bbox::BBox, constants::WEB_MERCATOR_EXTENT, utils::bbox_covered_tiles};
+use maptile::{bbox::BBox, utils::bbox_covered_tiles};
 use proj::Proj;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rusqlite::Connection;
 use spade::Point2;
 use std::sync::Mutex;
 
-pub fn read(bbox_3857: BBox, zoom: u8, tile_size: u16, buffer_px: u32) -> Vec<TileMeta> {
-    let pixels_per_meter = (((tile_size as u64) << zoom) as f64) / 2.0 / WEB_MERCATOR_EXTENT;
+pub fn read(params: &Params) -> Vec<TileMeta> {
+    let buffer_m = params.buffer_px as f64 / params.get_pixels_per_meter();
 
-    let buffer_m = buffer_px as f64 / pixels_per_meter;
-
-    let tile_metas: Vec<_> = bbox_covered_tiles(&bbox_3857, zoom)
-        .map(|tile| TileMeta {
-            tile,
-            bbox: tile.bounds(tile_size).to_extended(buffer_m),
-            points: Mutex::new(Vec::<PointWithHeight>::new()),
-        })
-        .collect();
+    let tile_metas: Vec<_> = bbox_covered_tiles(
+        &params.bbox_3857,
+        params.zoom - params.supertile_zoom_offset,
+    )
+    .map(|tile| TileMeta {
+        tile,
+        bbox: tile
+            .bounds(params.tile_size << params.supertile_zoom_offset)
+            .to_extended(buffer_m),
+        points: Mutex::new(Vec::<PointWithHeight>::new()),
+    })
+    .collect();
 
     let proj_3857_to_8353 = Proj::new_known_crs("EPSG:3857", "EPSG:8353", None)
         .expect("Failed to create PROJ transformation");
 
     let bbox_8353: BBox = proj_3857_to_8353
         .transform_bounds(
-            bbox_3857.min_x,
-            bbox_3857.min_y,
-            bbox_3857.max_x,
-            bbox_3857.max_y,
+            params.bbox_3857.min_x,
+            params.bbox_3857.min_y,
+            params.bbox_3857.max_x,
+            params.bbox_3857.max_y,
             11,
         )
         .unwrap()
@@ -70,7 +76,7 @@ pub fn read(bbox_3857: BBox, zoom: u8, tile_size: u16, buffer_px: u32) -> Vec<Ti
 
                 let (x, y) = proj.convert((point.x, point.y)).unwrap();
 
-                if !bbox_3857.contains(x, y) {
+                if !params.bbox_3857.contains(x, y) {
                     continue;
                 }
 

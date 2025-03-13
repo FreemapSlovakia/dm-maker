@@ -1,4 +1,5 @@
 use crate::{
+    params::Params,
     schema::create_schema,
     shared_types::{PointWithHeight, TileMeta},
 };
@@ -9,7 +10,7 @@ use rusqlite::Connection;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use std::{fs::remove_file, io::Cursor, sync::Mutex};
 
-pub fn rasterize(pixels_per_meter: f64, buffer_px: u32, tile_metas: Vec<TileMeta>) {
+pub fn rasterize(params: &Params, tile_metas: Vec<TileMeta>) {
     remove_file("out.mbtiles").unwrap_or(());
 
     let conn = Connection::open("out.mbtiles").unwrap();
@@ -46,6 +47,8 @@ pub fn rasterize(pixels_per_meter: f64, buffer_px: u32, tile_metas: Vec<TileMeta
         }
 
         let bbox_3857 = tile_meta.bbox;
+
+        let pixels_per_meter = params.get_pixels_per_meter();
 
         let width_pixels = (bbox_3857.width() * pixels_per_meter).round() as u32;
         let height_pixels = (bbox_3857.height() * pixels_per_meter).round() as u32;
@@ -105,15 +108,26 @@ pub fn rasterize(pixels_per_meter: f64, buffer_px: u32, tile_metas: Vec<TileMeta
             },
         );
 
-        let tiles = tile_meta.tile.get_children();
+        let mut tiles = vec![tile_meta.tile];
+
+        let supertile_zoom_offset = params.supertile_zoom_offset;
+
+        for _ in 0..supertile_zoom_offset {
+            tiles = tiles.iter().flat_map(|tile| tile.get_children()).collect();
+        }
+
+        tiles.sort_by(|a, b| a.y.cmp(&b.y).then_with(|| a.x.cmp(&b.x)));
+
+        let buffer_px = params.buffer_px;
+        let tile_size = params.tile_size as u32;
 
         for (sector, tile) in tiles.iter().enumerate() {
             let img = crop_imm(
                 &img,
-                buffer_px + ((sector as u32) & 1) * 256,
-                buffer_px + (sector as u32 >> 1) * 256,
-                256,
-                256,
+                buffer_px + ((sector as u32) & ((1 << supertile_zoom_offset) - 1)) * tile_size,
+                buffer_px + (sector as u32 >> supertile_zoom_offset) * tile_size,
+                tile_size,
+                tile_size,
             )
             .to_image();
 
