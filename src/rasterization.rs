@@ -65,14 +65,10 @@ pub fn rasterize(params: &Params, tile_metas: Vec<TileMeta>) {
             for x in 0..width_pixels {
                 let cx = bbox_3857.min_x + x as f64 * bbox_3857.width() / width_pixels as f64;
 
-                let v = nn.interpolate(|v| v.data().height, Point2::new(cx, cy));
+                let value = nn.interpolate(|v| v.data().height, Point2::new(cx, cy));
 
-                if let Some(v) = v {
-                    if v.is_nan() {
-                        println!("NAN {cx} {cy}")
-                    }
-
-                    img.push(v);
+                if let Some(value) = value {
+                    img.push(value);
                 } else {
                     img.push(f64::NAN);
                 }
