@@ -1,8 +1,10 @@
+mod igor;
 mod index;
 mod params;
 mod rasterization;
 mod read;
 mod schema;
+mod shading;
 mod shared_types;
 
 use maptile::bbox::BBox;
