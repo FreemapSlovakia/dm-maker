@@ -40,12 +40,12 @@ pub fn rasterize(params: &Params, tile_metas: Vec<TileMeta>) {
     tile_metas.into_par_iter().for_each(|tile_meta| {
         // println!("Processing {:?}", tile_meta.tile);
 
-        let mut t = DelaunayTriangulation::<PointWithHeight>::new();
+        let mut triangulation = DelaunayTriangulation::<PointWithHeight>::new();
 
         let points = tile_meta.points.into_inner().unwrap();
 
         for point in points {
-            t.insert(point).unwrap();
+            triangulation.insert(point).unwrap();
         }
 
         let bbox_3857 = tile_meta.bbox;
@@ -57,7 +57,7 @@ pub fn rasterize(params: &Params, tile_metas: Vec<TileMeta>) {
 
         let mut img = Vec::new();
 
-        let nn = t.natural_neighbor();
+        let natural_neighbor = triangulation.natural_neighbor();
 
         for y in 0..height_pixels {
             let cy = bbox_3857.min_y + y as f64 * bbox_3857.height() / height_pixels as f64;
@@ -65,7 +65,7 @@ pub fn rasterize(params: &Params, tile_metas: Vec<TileMeta>) {
             for x in 0..width_pixels {
                 let cx = bbox_3857.min_x + x as f64 * bbox_3857.width() / width_pixels as f64;
 
-                let value = nn.interpolate(|v| v.data().height, Point2::new(cx, cy));
+                let value = natural_neighbor.interpolate(|v| v.data().height, Point2::new(cx, cy));
 
                 if let Some(value) = value {
                     img.push(value);
