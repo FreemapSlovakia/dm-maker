@@ -12,7 +12,7 @@ use spade::Point2;
 use std::sync::Mutex;
 
 pub fn read(params: &Params) -> Vec<TileMeta> {
-    let buffer_m = params.buffer_px as f64 / params.get_pixels_per_meter();
+    let buffer_m = params.buffer_px as f64 / params.pixels_per_meter();
 
     let tile_metas: Vec<_> = bbox_covered_tiles(
         &params.bbox_3857,

@@ -1,27 +1,38 @@
 use crate::{
     igor::igor_rgb,
     params::Params,
+    progress::Progress,
     schema::create_schema,
     shading::compute_hillshade,
-    shared_types::{PointWithHeight, TileMeta},
+    shared_types::{Job, PointWithHeight},
 };
 use core::f64;
-use image::{codecs::jpeg::JpegEncoder, imageops::crop_imm};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use image::{
+    GenericImage, ImageBuffer, Rgb, RgbImage,
+    codecs::jpeg::JpegEncoder,
+    imageops::{FilterType, crop_imm},
+};
+use maptile::tile::Tile;
 use rusqlite::Connection;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
-use std::{fs::remove_file, io::Cursor, sync::Mutex};
+use std::{
+    collections::HashMap,
+    fs::remove_file,
+    io::Cursor,
+    sync::{Arc, Mutex},
+    thread::{self, available_parallelism},
+};
 
-pub fn rasterize(params: &Params, tile_metas: Vec<TileMeta>) {
-    remove_file("out.mbtiles").unwrap_or(());
+pub fn rasterize(params: &Params, jobs: Vec<Job>) {
+    remove_file("plesivecka.mbtiles").unwrap_or(());
 
-    let conn = Connection::open("out.mbtiles").unwrap();
+    let conn = Connection::open("plesivecka.mbtiles").unwrap();
 
     create_schema(
         &conn,
         &[
             ("name", "HS"),
-            ("minzoom", "20"),
+            ("minzoom", "0"),
             ("maxzoom", "20"),
             ("format", "jpeg"),
             // ("bounds", ...TODO)
@@ -33,114 +44,191 @@ pub fn rasterize(params: &Params, tile_metas: Vec<TileMeta>) {
 
     conn.pragma_update(None, "journal_mode", "WAL").unwrap();
 
-    let conn = Mutex::new(conn);
+    let conn = Arc::new(Mutex::new(conn));
 
-    println!("Tiles: {}", tile_metas.len());
+    let state = Arc::new(Mutex::new(Progress::new(
+        jobs,
+        params.supertile_zoom_offset,
+    )));
 
-    tile_metas.into_par_iter().for_each(|tile_meta| {
-        // println!("Processing {:?}", tile_meta.tile);
+    thread::scope(|scope| {
+        let jobs_len = state.lock().unwrap().jobs.len();
 
-        let mut triangulation = DelaunayTriangulation::<PointWithHeight>::new();
+        let for_overviews = Arc::new(Mutex::new(HashMap::<Tile, ImageBuffer<_, _>>::new()));
 
-        let points = tile_meta.points.into_inner().unwrap();
+        for _ in 0..(jobs_len.min(available_parallelism().unwrap().get())) {
+            let state = Arc::clone(&state);
 
-        for point in points {
-            triangulation.insert(point).unwrap();
-        }
+            let conn = Arc::clone(&conn);
 
-        let bbox_3857 = tile_meta.bbox;
+            let for_overviews = Arc::clone(&for_overviews);
 
-        let pixels_per_meter = params.get_pixels_per_meter();
+            scope.spawn(move || {
+                let save_tile = |tile: Tile, img: ImageBuffer<Rgb<u8>, Vec<u8>>| {
+                    let mut buffer = vec![];
 
-        let width_pixels = (bbox_3857.width() * pixels_per_meter).round() as u32;
-        let height_pixels = (bbox_3857.height() * pixels_per_meter).round() as u32;
+                    img.write_with_encoder(JpegEncoder::new(Cursor::new(&mut buffer)))
+                        .unwrap();
 
-        let mut img = Vec::new();
+                    for_overviews.lock().unwrap().insert(tile, img);
 
-        let natural_neighbor = triangulation.natural_neighbor();
+                    conn.lock()
+                        .unwrap()
+                        .execute(
+                            "INSERT INTO tiles VALUES (?1, ?2, ?3, ?4)",
+                            (tile.zoom, tile.x, tile.reversed_y(), buffer),
+                        )
+                        .unwrap();
 
-        for y in 0..height_pixels {
-            let cy = bbox_3857.min_y + y as f64 * bbox_3857.height() / height_pixels as f64;
+                    state.lock().unwrap().done(tile);
+                };
 
-            for x in 0..width_pixels {
-                let cx = bbox_3857.min_x + x as f64 * bbox_3857.width() / width_pixels as f64;
+                loop {
+                    let Some(job) = state.lock().unwrap().next() else {
+                        break;
+                    };
 
-                let value = natural_neighbor.interpolate(|v| v.data().height, Point2::new(cx, cy));
+                    match job {
+                        Job::Rasterize(tile_meta) => {
+                            // println!("Processing {:?}", tile_meta.tile);
 
-                if let Some(value) = value {
-                    img.push(value);
-                } else {
-                    img.push(f64::NAN);
+                            let mut triangulation = DelaunayTriangulation::<PointWithHeight>::new();
+
+                            let points = tile_meta.points.into_inner().unwrap();
+
+                            for point in points {
+                                triangulation.insert(point).unwrap();
+                            }
+
+                            let bbox_3857 = tile_meta.bbox;
+
+                            let pixels_per_meter = params.pixels_per_meter();
+
+                            let width_pixels =
+                                (bbox_3857.width() * pixels_per_meter).round() as u32;
+                            let height_pixels =
+                                (bbox_3857.height() * pixels_per_meter).round() as u32;
+
+                            let mut img = Vec::new();
+
+                            let natural_neighbor = triangulation.natural_neighbor();
+
+                            for y in 0..height_pixels {
+                                let cy = bbox_3857.min_y
+                                    + y as f64 * bbox_3857.height() / height_pixels as f64;
+
+                                for x in 0..width_pixels {
+                                    let cx = bbox_3857.min_x
+                                        + x as f64 * bbox_3857.width() / width_pixels as f64;
+
+                                    let value = natural_neighbor
+                                        .interpolate(|v| v.data().height, Point2::new(cx, cy));
+
+                                    if let Some(value) = value {
+                                        img.push(value);
+                                    } else {
+                                        img.push(f64::NAN);
+                                    }
+                                }
+                            }
+
+                            // let sun_azimuth_rad = 315_f64.to_radians();
+                            // let sun_zenith_rad = 45_f64.to_radians();
+
+                            let img = compute_hillshade(
+                                img,
+                                height_pixels as usize,
+                                width_pixels as usize,
+                                |aspect_rad, slope_rad| {
+                                    igor_rgb(
+                                        aspect_rad,
+                                        slope_rad,
+                                        &[
+                                            (-120.0, 0.8, 0x203060),
+                                            (60.0, 0.7, 0xFFEE00),
+                                            (-45.0, 1.0, 0x000000),
+                                        ],
+                                        1.0,
+                                        0.0,
+                                    )
+
+                                    // // Compute illumination using sun angle
+                                    // let illumination = sun_zenith_rad.cos() * slope_rad.cos()
+                                    //     + sun_zenith_rad.sin() * slope_rad.sin() * (sun_azimuth_rad - aspect_rad).cos();
+
+                                    // // Scale to 0-255
+                                    // let shade = (illumination * 255.0).clamp(0.0, 255.0) as u8;
+
+                                    // [shade, shade, shade]
+                                },
+                            );
+
+                            let supertile_zoom_offset = params.supertile_zoom_offset;
+
+                            let mut tiles = tile_meta.tile.descendants(supertile_zoom_offset);
+
+                            tiles.sort_by(|a, b| a.y.cmp(&b.y).then_with(|| a.x.cmp(&b.x)));
+
+                            let buffer_px = params.buffer_px;
+                            let tile_size = params.tile_size as u32;
+
+                            for (sector, tile) in tiles.iter().enumerate() {
+                                let img = crop_imm(
+                                    &img,
+                                    buffer_px
+                                        + ((sector as u32) & ((1 << supertile_zoom_offset) - 1))
+                                            * tile_size,
+                                    buffer_px
+                                        + (sector as u32 >> supertile_zoom_offset) * tile_size,
+                                    tile_size,
+                                    tile_size,
+                                )
+                                .to_image();
+
+                                save_tile(*tile, img);
+                            }
+                        }
+                        Job::Overview(tile) => {
+                            let mut for_overviews = for_overviews.lock().unwrap();
+
+                            let imgs: Vec<_> = tile
+                                .children()
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(i, tile)| {
+                                    for_overviews.remove(tile).map(|img| (i, img))
+                                })
+                                .collect();
+
+                            drop(for_overviews);
+
+                            let mut tile_img = RgbImage::new(
+                                u32::from(params.tile_size) << 1,
+                                u32::from(params.tile_size) << 1,
+                            );
+
+                            for (i, img) in imgs {
+                                tile_img
+                                    .copy_from(
+                                        &img,
+                                        ((i & 1) as u32) * params.tile_size as u32,
+                                        (i >> 1) as u32 * params.tile_size as u32,
+                                    )
+                                    .unwrap();
+                            }
+
+                            let img = image::imageops::resize(
+                                &tile_img,
+                                u32::from(params.tile_size),
+                                u32::from(params.tile_size),
+                                FilterType::Lanczos3,
+                            );
+
+                            save_tile(tile, img);
+                        }
+                    };
                 }
-            }
-        }
-
-        // let sun_azimuth_rad = 315_f64.to_radians();
-        // let sun_zenith_rad = 45_f64.to_radians();
-
-        let img = compute_hillshade(
-            img,
-            height_pixels as usize,
-            width_pixels as usize,
-            |aspect_rad, slope_rad| {
-                igor_rgb(
-                    aspect_rad,
-                    slope_rad,
-                    &[
-                        (-120.0, 0.8, 0x203060),
-                        (60.0, 0.7, 0xFFEE00),
-                        (-45.0, 1.0, 0x000000),
-                    ],
-                    1.0,
-                    0.0,
-                )
-
-                // // Compute illumination using sun angle
-                // let illumination = sun_zenith_rad.cos() * slope_rad.cos()
-                //     + sun_zenith_rad.sin() * slope_rad.sin() * (sun_azimuth_rad - aspect_rad).cos();
-
-                // // Scale to 0-255
-                // let shade = (illumination * 255.0).clamp(0.0, 255.0) as u8;
-
-                // [shade, shade, shade]
-            },
-        );
-
-        let mut tiles = vec![tile_meta.tile];
-
-        let supertile_zoom_offset = params.supertile_zoom_offset;
-
-        for _ in 0..supertile_zoom_offset {
-            tiles = tiles.iter().flat_map(|tile| tile.get_children()).collect();
-        }
-
-        tiles.sort_by(|a, b| a.y.cmp(&b.y).then_with(|| a.x.cmp(&b.x)));
-
-        let buffer_px = params.buffer_px;
-        let tile_size = params.tile_size as u32;
-
-        for (sector, tile) in tiles.iter().enumerate() {
-            let img = crop_imm(
-                &img,
-                buffer_px + ((sector as u32) & ((1 << supertile_zoom_offset) - 1)) * tile_size,
-                buffer_px + (sector as u32 >> supertile_zoom_offset) * tile_size,
-                tile_size,
-                tile_size,
-            )
-            .to_image();
-
-            let mut buffer = vec![];
-
-            img.write_with_encoder(JpegEncoder::new(Cursor::new(&mut buffer)))
-                .unwrap();
-
-            conn.lock()
-                .unwrap()
-                .execute(
-                    "INSERT INTO tiles VALUES (?1, ?2, ?3, ?4)",
-                    (tile.zoom, tile.x, tile.reversed_y(), buffer),
-                )
-                .unwrap();
+            });
         }
     });
 }

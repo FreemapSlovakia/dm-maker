@@ -20,3 +20,17 @@ pub struct TileMeta {
     pub bbox: BBox,
     pub points: Mutex<Vec<PointWithHeight>>,
 }
+
+pub enum Job {
+    Rasterize(TileMeta),
+    Overview(Tile),
+}
+
+impl Job {
+    pub const fn tile(&self) -> Tile {
+        match self {
+            Self::Rasterize(tile_meta) => tile_meta.tile,
+            Self::Overview(tile) => *tile,
+        }
+    }
+}

@@ -9,7 +9,7 @@ pub struct Params {
 }
 
 impl Params {
-    pub fn get_pixels_per_meter(&self) -> f64 {
+    pub fn pixels_per_meter(&self) -> f64 {
         (((self.tile_size as u64) << self.zoom) as f64) / 2.0 / WEB_MERCATOR_EXTENT
     }
 }
