@@ -1,9 +1,22 @@
+use clap::Parser;
 use las::Reader;
 use rusqlite::Connection;
+use std::path::PathBuf;
 use walkdir::WalkDir;
 
-pub fn index() {
-    let conn = Connection::open("index.sqlite").unwrap();
+#[derive(Parser, Debug, PartialEq)]
+struct Options {
+    /// Directory with *.laz files
+    directory: PathBuf, // "/home/martin/18TB"
+
+    /// Output database file
+    database: PathBuf, // "/home/martin/14TB/sk-new-dmr/laztiles.sqlite"
+}
+
+fn main() {
+    let options = Options::parse();
+
+    let conn = Connection::open(options.database).unwrap();
 
     conn.execute(
       "CREATE TABLE laz_index (min_x NUMBER, max_x NUMBER, min_y NUMBER, max_y NUMBER, file VARCHAR)", ()
@@ -14,7 +27,7 @@ pub fn index() {
         .prepare("INSERT INTO laz_index VALUES (?1, ?2, ?3, ?4, ?5)")
         .unwrap();
 
-    for dir in WalkDir::new("/home/martin/18TB") {
+    for dir in WalkDir::new(options.directory) {
         let dir = dir.unwrap();
 
         println!("{}", dir.file_name().to_string_lossy());
@@ -28,8 +41,6 @@ pub fn index() {
             let reader = Reader::from_path(dir.path()).unwrap();
 
             let bounds = reader.header().bounds();
-
-            // println!("{:?}", header.bounds());
 
             let _ = stmt
                 .execute((

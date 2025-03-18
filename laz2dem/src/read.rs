@@ -1,6 +1,6 @@
 use crate::{
     params::Params,
-    shared_types::{PointWithHeight, TileMeta},
+    shared_types::{PointWithHeight, Source, TileMeta},
 };
 use core::f64;
 use las::{Reader, point::Classification};
@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use spade::Point2;
 use std::sync::Mutex;
 
-pub fn read(params: &Params) -> Vec<TileMeta> {
+pub fn read(source: &Source, params: &Params) -> Vec<TileMeta> {
     let buffer_m = params.buffer_px as f64 / params.pixels_per_meter();
 
     let tile_metas: Vec<_> = bbox_covered_tiles(
@@ -27,6 +27,10 @@ pub fn read(params: &Params) -> Vec<TileMeta> {
     })
     .collect();
 
+    let Source::LazIndexDb(path) = source else {
+        return tile_metas;
+    };
+
     let proj_3857_to_8353 = Proj::new_known_crs("EPSG:3857", "EPSG:8353", None)
         .expect("Failed to create PROJ transformation");
 
@@ -41,7 +45,7 @@ pub fn read(params: &Params) -> Vec<TileMeta> {
         .unwrap()
         .into();
 
-    let conn = Connection::open("index.sqlite").unwrap();
+    let conn = Connection::open(path).unwrap();
 
     let mut stmt = conn.prepare("SELECT file FROM laz_index WHERE max_x >= ?1 AND min_x <= ?3 AND max_y >= ?2 AND min_y <= ?4").unwrap();
 

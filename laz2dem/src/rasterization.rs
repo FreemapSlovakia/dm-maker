@@ -1,10 +1,9 @@
 use crate::{
-    igor::igor_rgb,
     params::Params,
     progress::Progress,
     schema::create_schema,
-    shading::compute_hillshade,
-    shared_types::{Job, PointWithHeight},
+    shading::{compute_hillshade, shade},
+    shared_types::{Job, PointWithHeight, Shading, Source},
 };
 use core::f64;
 use image::{
@@ -12,6 +11,7 @@ use image::{
     codecs::jpeg::JpegEncoder,
     imageops::{FilterType, crop_imm},
 };
+use las::Reader;
 use maptile::tile::Tile;
 use rusqlite::Connection;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
@@ -19,21 +19,28 @@ use std::{
     collections::HashMap,
     fs::remove_file,
     io::Cursor,
+    path::Path,
     sync::{Arc, Mutex},
     thread::{self, available_parallelism},
 };
 
-pub fn rasterize(params: &Params, jobs: Vec<Job>) {
-    remove_file("plesivecka.mbtiles").unwrap_or(());
+pub fn rasterize(
+    output: &Path,
+    source: &Source,
+    params: &Params,
+    jobs: Vec<Job>,
+    shading: &[Shading],
+) {
+    remove_file(output).unwrap_or(());
 
-    let conn = Connection::open("plesivecka.mbtiles").unwrap();
+    let conn = Connection::open(output).unwrap();
 
     create_schema(
         &conn,
         &[
-            ("name", "HS"),
+            ("name", "HS"), // TODO
             ("minzoom", "0"),
-            ("maxzoom", "20"),
+            ("maxzoom", params.zoom.to_string().as_ref()),
             ("format", "jpeg"),
             // ("bounds", ...TODO)
         ],
@@ -90,11 +97,44 @@ pub fn rasterize(params: &Params, jobs: Vec<Job>) {
 
                     match job {
                         Job::Rasterize(tile_meta) => {
-                            // println!("Processing {:?}", tile_meta.tile);
+                            println!("Processing {:?}", tile_meta.tile);
+
+                            let points = match source {
+                                Source::LazTileDb(path_buf) => {
+                                    let conn = Connection::open(path_buf).unwrap();
+
+                                    let mut stmt = conn
+                                        .prepare("SELECT data FROM tiles WHERE x = ?1 AND y = ?2")
+                                        .unwrap();
+
+                                    let mut rows =
+                                        stmt.query((tile_meta.tile.x, tile_meta.tile.y)).unwrap();
+
+                                    let mut points = Vec::new();
+
+                                    while let Some(row) = rows.next().unwrap() {
+                                        let data: Vec<u8> = row.get(0).unwrap();
+
+                                        let mut reader = Reader::new(Cursor::new(data)).unwrap();
+
+                                        reader.read_all_points_into(&mut points).unwrap();
+                                    }
+
+                                    points
+                                        .into_iter()
+                                        .map(|point| PointWithHeight {
+                                            position: Point2 {
+                                                x: point.x,
+                                                y: point.y,
+                                            },
+                                            height: point.z,
+                                        })
+                                        .collect()
+                                }
+                                Source::LazIndexDb(_) => tile_meta.points.into_inner().unwrap(),
+                            };
 
                             let mut triangulation = DelaunayTriangulation::<PointWithHeight>::new();
-
-                            let points = tile_meta.points.into_inner().unwrap();
 
                             for point in points {
                                 triangulation.insert(point).unwrap();
@@ -106,6 +146,7 @@ pub fn rasterize(params: &Params, jobs: Vec<Job>) {
 
                             let width_pixels =
                                 (bbox_3857.width() * pixels_per_meter).round() as u32;
+
                             let height_pixels =
                                 (bbox_3857.height() * pixels_per_meter).round() as u32;
 
@@ -121,14 +162,11 @@ pub fn rasterize(params: &Params, jobs: Vec<Job>) {
                                     let cx = bbox_3857.min_x
                                         + x as f64 * bbox_3857.width() / width_pixels as f64;
 
-                                    let value = natural_neighbor
-                                        .interpolate(|v| v.data().height, Point2::new(cx, cy));
-
-                                    if let Some(value) = value {
-                                        img.push(value);
-                                    } else {
-                                        img.push(f64::NAN);
-                                    }
+                                    img.push(
+                                        natural_neighbor
+                                            .interpolate(|v| v.data().height, Point2::new(cx, cy))
+                                            .unwrap_or(f64::NAN),
+                                    );
                                 }
                             }
 
@@ -140,16 +178,14 @@ pub fn rasterize(params: &Params, jobs: Vec<Job>) {
                                 height_pixels as usize,
                                 width_pixels as usize,
                                 |aspect_rad, slope_rad| {
-                                    igor_rgb(
-                                        aspect_rad,
-                                        slope_rad,
-                                        &[
-                                            (-120.0, 0.8, 0x203060),
-                                            (60.0, 0.7, 0xFFEE00),
-                                            (-45.0, 1.0, 0x000000),
-                                        ],
-                                        1.0,
-                                        0.0,
+                                    shade(
+                                        aspect_rad, slope_rad, shading,
+                                        // &[
+                                        //     (-120.0, 0.8, 0x203060),
+                                        //     (60.0, 0.7, 0xFFEE00),
+                                        //     (-45.0, 1.0, 0x000000),
+                                        // ],
+                                        1.0, 0.0,
                                     )
 
                                     // // Compute illumination using sun angle

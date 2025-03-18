@@ -54,8 +54,6 @@ impl Progress {
             };
 
             for tile in tiles {
-                println!("NEXT {tile}");
-
                 *self.states.get_mut(&tile).unwrap() = State::Processing;
             }
         }
@@ -72,22 +70,16 @@ impl Progress {
 
         let parent_state = self.states.get(&parent);
 
-        if !matches!(parent_state, Some(&State::Planned)) {
+        if !matches!(parent_state, Some(&State::Planned))
+            || parent.children().iter().any(|tile| {
+                matches!(
+                    self.states.get(tile),
+                    Some(&State::Processing | &State::Waiting | &State::Planned)
+                )
+            })
+        {
             return;
         }
-
-        if parent.children().iter().any(|tile| {
-            matches!(
-                self.states.get(tile),
-                Some(&State::Processing | &State::Waiting | &State::Planned)
-            )
-        }) {
-            println!("HALT {parent}");
-
-            return;
-        }
-
-        println!("PASS {parent}");
 
         self.states.insert(parent, State::Waiting);
 
