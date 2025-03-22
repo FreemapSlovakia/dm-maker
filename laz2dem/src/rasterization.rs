@@ -95,10 +95,10 @@ pub fn rasterize(
                         break;
                     };
 
+                    println!("Processing {:?}", job);
+
                     match job {
                         Job::Rasterize(tile_meta) => {
-                            println!("Processing {:?}", tile_meta.tile);
-
                             let points = match source {
                                 Source::LazTileDb(path_buf) => {
                                     let conn = Connection::open(path_buf).unwrap();

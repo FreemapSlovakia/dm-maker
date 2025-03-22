@@ -1,6 +1,12 @@
 use maptile::{bbox::BBox, tile::Tile};
 use spade::{HasPosition, Point2};
-use std::{error::Error, fmt::Display, path::PathBuf, str::FromStr, sync::Mutex};
+use std::{
+    error::Error,
+    fmt::{Debug, Display},
+    path::PathBuf,
+    str::FromStr,
+    sync::Mutex,
+};
 
 pub struct PointWithHeight {
     pub position: Point2<f64>,
@@ -21,6 +27,16 @@ pub struct TileMeta {
     pub points: Mutex<Vec<PointWithHeight>>,
 }
 
+impl Debug for TileMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TileMeta")
+            .field("tile", &self.tile)
+            .field("bbox", &self.bbox)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
 pub enum Job {
     Rasterize(TileMeta),
     Overview(Tile),
@@ -144,7 +160,7 @@ impl FromStr for Shadings {
                     _ => Err(()),
                 };
 
-                let color = u32::from_str_radix(params[0], 16);
+                let color = u32::from_str_radix(params[1], 16);
 
                 match (color, method) {
                     (Ok(color), Ok(method)) => Ok(Shading { color, method }),
