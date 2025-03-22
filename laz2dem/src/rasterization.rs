@@ -13,6 +13,7 @@ use image::{
 };
 use las::Reader;
 use maptile::tile::Tile;
+use proj::Proj;
 use rusqlite::Connection;
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use std::{
@@ -30,17 +31,35 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
 
     let conn = Connection::open(output).unwrap();
 
-    create_schema(
-        &conn,
-        &[
-            ("name", "HS"), // TODO
-            ("minzoom", "0"),
-            ("maxzoom", options.zoom_level.to_string().as_ref()),
-            ("format", "jpeg"),
-            // ("bounds", ...TODO)
-        ],
-    )
-    .unwrap();
+    {
+        let proj_3857_to_4326 = Proj::new_known_crs("EPSG:3857", "EPSG:4326", None)
+            .expect("Failed to create PROJ transformation");
+
+        let mut bounds = vec![
+            (options.bbox.min_x, options.bbox.min_y),
+            (options.bbox.max_x, options.bbox.max_y),
+        ];
+
+        proj_3857_to_4326.project_array(&mut bounds, false).unwrap();
+
+        create_schema(
+            &conn,
+            &[
+                ("name", "HS"), // TODO
+                ("minzoom", "0"),
+                ("maxzoom", options.zoom_level.to_string().as_ref()),
+                ("format", "jpeg"),
+                (
+                    "bounds",
+                    &format!(
+                        "{},{},{},{}",
+                        bounds[0].0, bounds[0].1, bounds[1].0, bounds[1].1
+                    ),
+                ),
+            ],
+        )
+        .unwrap();
+    }
 
     conn.pragma_update(None, "synchronous", "OFF").unwrap();
 
