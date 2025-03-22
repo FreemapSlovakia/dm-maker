@@ -1,5 +1,5 @@
 use crate::{
-    params::Params,
+    options::Options,
     shared_types::{PointWithHeight, Source, TileMeta},
 };
 use core::f64;
@@ -11,23 +11,23 @@ use rusqlite::Connection;
 use spade::Point2;
 use std::sync::Mutex;
 
-pub fn read(source: &Source, params: &Params) -> Vec<TileMeta> {
-    let buffer_m = params.buffer_px as f64 / params.pixels_per_meter();
+pub fn read(options: &Options) -> Vec<TileMeta> {
+    let buffer_m = options.buffer as f64 / options.pixels_per_meter();
 
     let tile_metas: Vec<_> = bbox_covered_tiles(
-        &params.bbox_3857,
-        params.zoom - params.supertile_zoom_offset,
+        &options.bbox,
+        options.zoom_level - options.supertile_zoom_offset,
     )
     .map(|tile| TileMeta {
         tile,
         bbox: tile
-            .bounds(params.tile_size << params.supertile_zoom_offset)
+            .bounds(options.tile_size << options.supertile_zoom_offset)
             .to_extended(buffer_m),
         points: Mutex::new(Vec::<PointWithHeight>::new()),
     })
     .collect();
 
-    let Source::LazIndexDb(path) = source else {
+    let Source::LazIndexDb(path) = options.source() else {
         return tile_metas;
     };
 
@@ -36,10 +36,10 @@ pub fn read(source: &Source, params: &Params) -> Vec<TileMeta> {
 
     let bbox_8353: BBox = proj_3857_to_8353
         .transform_bounds(
-            params.bbox_3857.min_x,
-            params.bbox_3857.min_y,
-            params.bbox_3857.max_x,
-            params.bbox_3857.max_y,
+            options.bbox.min_x,
+            options.bbox.min_y,
+            options.bbox.max_x,
+            options.bbox.max_y,
             11,
         )
         .unwrap()
@@ -80,7 +80,7 @@ pub fn read(source: &Source, params: &Params) -> Vec<TileMeta> {
 
                 let (x, y) = proj.convert((point.x, point.y)).unwrap();
 
-                if !params.bbox_3857.contains(x, y) {
+                if !options.bbox.contains(x, y) {
                     continue;
                 }
 

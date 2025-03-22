@@ -1,9 +1,9 @@
 use crate::{
-    params::Params,
+    options::Options,
     progress::Progress,
     schema::create_schema,
     shading::{compute_hillshade, shade},
-    shared_types::{Job, PointWithHeight, Shading, Source},
+    shared_types::{Job, PointWithHeight, Source},
 };
 use core::f64;
 use image::{
@@ -19,18 +19,13 @@ use std::{
     collections::HashMap,
     fs::remove_file,
     io::Cursor,
-    path::Path,
     sync::{Arc, Mutex},
     thread::{self, available_parallelism},
 };
 
-pub fn rasterize(
-    output: &Path,
-    source: &Source,
-    params: &Params,
-    jobs: Vec<Job>,
-    shading: &[Shading],
-) {
+pub fn rasterize(options: &Options, jobs: Vec<Job>) {
+    let output = &options.output;
+
     remove_file(output).unwrap_or(());
 
     let conn = Connection::open(output).unwrap();
@@ -40,7 +35,7 @@ pub fn rasterize(
         &[
             ("name", "HS"), // TODO
             ("minzoom", "0"),
-            ("maxzoom", params.zoom.to_string().as_ref()),
+            ("maxzoom", options.zoom_level.to_string().as_ref()),
             ("format", "jpeg"),
             // ("bounds", ...TODO)
         ],
@@ -55,8 +50,10 @@ pub fn rasterize(
 
     let state = Arc::new(Mutex::new(Progress::new(
         jobs,
-        params.supertile_zoom_offset,
+        options.supertile_zoom_offset,
     )));
+
+    let source = &options.source();
 
     thread::scope(|scope| {
         let jobs_len = state.lock().unwrap().jobs.len();
@@ -142,7 +139,7 @@ pub fn rasterize(
 
                             let bbox_3857 = tile_meta.bbox;
 
-                            let pixels_per_meter = params.pixels_per_meter();
+                            let pixels_per_meter = options.pixels_per_meter();
 
                             let width_pixels =
                                 (bbox_3857.width() * pixels_per_meter).round() as u32;
@@ -174,18 +171,22 @@ pub fn rasterize(
                             // let sun_zenith_rad = 45_f64.to_radians();
 
                             let img = compute_hillshade(
-                                img,
+                                &img,
+                                options.z_factor,
                                 height_pixels as usize,
                                 width_pixels as usize,
                                 |aspect_rad, slope_rad| {
                                     shade(
-                                        aspect_rad, slope_rad, shading,
+                                        aspect_rad,
+                                        slope_rad,
+                                        options.shadings.0.as_ref(),
                                         // &[
                                         //     (-120.0, 0.8, 0x203060),
                                         //     (60.0, 0.7, 0xFFEE00),
                                         //     (-45.0, 1.0, 0x000000),
                                         // ],
-                                        1.0, 0.0,
+                                        1.0,
+                                        0.0,
                                     )
 
                                     // // Compute illumination using sun angle
@@ -199,14 +200,14 @@ pub fn rasterize(
                                 },
                             );
 
-                            let supertile_zoom_offset = params.supertile_zoom_offset;
+                            let supertile_zoom_offset = options.supertile_zoom_offset;
 
                             let mut tiles = tile_meta.tile.descendants(supertile_zoom_offset);
 
                             tiles.sort_by(|a, b| a.y.cmp(&b.y).then_with(|| a.x.cmp(&b.x)));
 
-                            let buffer_px = params.buffer_px;
-                            let tile_size = params.tile_size as u32;
+                            let buffer_px = options.buffer;
+                            let tile_size = options.tile_size as u32;
 
                             for (sector, tile) in tiles.iter().enumerate() {
                                 let img = crop_imm(
@@ -239,24 +240,24 @@ pub fn rasterize(
                             drop(for_overviews);
 
                             let mut tile_img = RgbImage::new(
-                                u32::from(params.tile_size) << 1,
-                                u32::from(params.tile_size) << 1,
+                                u32::from(options.tile_size) << 1,
+                                u32::from(options.tile_size) << 1,
                             );
 
                             for (i, img) in imgs {
                                 tile_img
                                     .copy_from(
                                         &img,
-                                        ((i & 1) as u32) * params.tile_size as u32,
-                                        (i >> 1) as u32 * params.tile_size as u32,
+                                        ((i & 1) as u32) * options.tile_size as u32,
+                                        (i >> 1) as u32 * options.tile_size as u32,
                                     )
                                     .unwrap();
                             }
 
                             let img = image::imageops::resize(
                                 &tile_img,
-                                u32::from(params.tile_size),
-                                u32::from(params.tile_size),
+                                u32::from(options.tile_size),
+                                u32::from(options.tile_size),
                                 FilterType::Lanczos3,
                             );
 

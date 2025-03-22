@@ -51,6 +51,7 @@ impl Job {
     }
 }
 
+#[derive(Clone)]
 pub enum Source {
     LazTileDb(PathBuf),
     LazIndexDb(PathBuf),
@@ -99,7 +100,6 @@ impl Display for ParseShadingError {
 
 impl Error for ParseShadingError {}
 
-// igor,ff4455ff,120+...
 impl FromStr for Shadings {
     type Err = ParseShadingError;
 
@@ -114,14 +114,9 @@ impl FromStr for Shadings {
                         if params.len() != 3 {
                             Err(())
                         } else {
-                            let azimuth = params[2].parse::<f64>();
-
-                            match azimuth {
-                                Ok(azimuth) => {
-                                    Ok(ShadingMethod::Igor(IgorShadingParams { azimuth }))
-                                }
-                                Err(_) => Err(()),
-                            }
+                            params[2].parse::<f64>().map_or(Err(()), |azimuth| {
+                                Ok(ShadingMethod::Igor(IgorShadingParams { azimuth }))
+                            })
                         }
                     }
                     Some(&"oblique") => {
@@ -147,14 +142,9 @@ impl FromStr for Shadings {
                         if params.len() != 3 {
                             Err(())
                         } else {
-                            let altitude = params[2].parse::<f64>();
-
-                            match altitude {
-                                Ok(altitude) => {
-                                    Ok(ShadingMethod::Slope(SlopeShadingParams { altitude }))
-                                }
-                                Err(_) => Err(()),
-                            }
+                            params[2].parse::<f64>().map_or(Err(()), |altitude| {
+                                Ok(ShadingMethod::Slope(SlopeShadingParams { altitude }))
+                            })
                         }
                     }
                     _ => Err(()),
@@ -169,6 +159,6 @@ impl FromStr for Shadings {
             })
             .collect();
 
-        Ok(Shadings(shadings?))
+        Ok(Self(shadings?))
     }
 }
