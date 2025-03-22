@@ -42,6 +42,10 @@ struct Options {
     #[clap(long, default_value_t = 256)]
     tile_size: u16,
 
+    /// Buffer size in pixels
+    #[clap(long, default_value_t = 40)]
+    buffer: u32,
+
     #[clap(long, group = "exclusive")]
     laz_tile_db: Option<PathBuf>,
 
@@ -75,7 +79,7 @@ fn main() {
     let params = Params {
         zoom: options.zoom_level,
         supertile_zoom_offset: options.supertile_zoom_offset,
-        buffer_px: 40,
+        buffer_px: options.buffer,
         tile_size: options.tile_size,
         bbox_3857: options.bbox,
     };
