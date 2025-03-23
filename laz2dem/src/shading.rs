@@ -2,7 +2,10 @@ use crate::shared_types::{
     IgorShadingParams, ObliqueShadingParams, Shading, ShadingMethod, SlopeShadingParams,
 };
 use image::RgbImage;
-use std::f64;
+use std::f64::{
+    self,
+    consts::{FRAC_PI_2, PI, TAU},
+};
 
 pub fn compute_hillshade<F>(
     elevation: &[f64],
@@ -18,10 +21,9 @@ where
 
     for y in 1..rows - 1 {
         for x in 1..cols - 1 {
-            let (slope_rad, aspect_rad) = compute_slope_and_aspect(elevation, z_factor, cols, x, y);
+            let (slope, aspect) = compute_slope_and_aspect(elevation, z_factor, cols, x, y);
 
-            hillshade.get_pixel_mut(x as u32, (rows - y) as u32).0 =
-                compute_rgb(aspect_rad, slope_rad);
+            hillshade.get_pixel_mut(x as u32, (rows - y) as u32).0 = compute_rgb(aspect, slope);
         }
     }
 
@@ -56,26 +58,26 @@ fn compute_slope_and_aspect(
     let dz_dy = dz_dy * z_factor;
 
     // Compute slope
-    let mut slope_rad = dz_dx.hypot(dz_dy).atan();
+    let mut slope = dz_dx.hypot(dz_dy).atan();
 
     // Compute aspect
-    let mut aspect_rad = dz_dy.atan2(-dz_dx);
+    let mut aspect = dz_dy.atan2(-dz_dx);
 
-    if aspect_rad < 0.0 {
-        aspect_rad += std::f64::consts::TAU;
+    if aspect < 0.0 {
+        aspect += TAU;
     }
 
-    if aspect_rad.is_nan() || slope_rad.is_nan() {
-        slope_rad = 0.0;
-        aspect_rad = 0.0;
+    if aspect.is_nan() || slope.is_nan() {
+        slope = 0.0;
+        aspect = 0.0;
     }
 
-    (slope_rad, aspect_rad)
+    (slope, aspect)
 }
 
 pub fn shade(
-    aspect_rad: f64,
-    slope_rad: f64,
+    aspect: f64,
+    slope: f64,
     shadings: &[Shading],
     contrast: f64,
     brightness: f64,
@@ -86,30 +88,28 @@ pub fn shade(
         .map(|shading| {
             let value = match &shading.method {
                 ShadingMethod::Igor(IgorShadingParams { azimuth }) => {
-                    let aspect_diff = difference_between_angles(
-                        aspect_rad,
-                        f64::consts::PI * 1.5 - azimuth.to_radians(),
-                        f64::consts::PI * 2.0,
-                    );
+                    let aspect_diff = difference_between_angles(aspect, azimuth + FRAC_PI_2, TAU);
 
-                    let aspect_strength = 1.0 - aspect_diff / f64::consts::PI;
+                    let aspect_strength = 1.0 - aspect_diff / PI;
 
-                    1.0 - slope_rad * 2.0 * aspect_strength
+                    1.0 - slope * 2.0 * aspect_strength
                 }
                 ShadingMethod::Oblique(ObliqueShadingParams { azimuth, altitude }) => {
-                    let zenith = f64::consts::FRAC_PI_2 - altitude;
+                    let zenith = FRAC_PI_2 - altitude;
 
-                    (zenith).cos() * slope_rad.cos()
-                        + (zenith).sin() * slope_rad.sin() * (azimuth - aspect_rad).cos()
+                    zenith.cos() * slope.cos()
+                        + zenith.sin() * slope.sin() * (azimuth - FRAC_PI_2 - aspect).cos()
                 }
                 ShadingMethod::Slope(SlopeShadingParams { altitude }) => {
-                    let zenith = f64::consts::FRAC_PI_2 - altitude;
+                    let zenith = FRAC_PI_2 - altitude;
 
-                    (zenith).cos() * slope_rad.cos() + (zenith).sin() * slope_rad.sin()
+                    zenith.cos() * slope.cos() + zenith.sin() * slope.sin()
                 }
             };
 
-            ((shading.color & 0xFF) as f64 / 255.0) * (1.0 - value)
+            let alpha = (shading.color & 0xFF) as f64 / 255.0;
+
+            alpha * (1.0 - value)
         })
         .collect();
 
@@ -128,7 +128,7 @@ pub fn shade(
 
         let value = contrast * ((sum / norm) - 0.5) + 0.5 + brightness;
 
-        let value = value + (1.0 - value) * (1.0 - alpha);
+        let value = value + (1.0 - value) * (1.0 - alpha); // 1.0 if alpha == 0.0 | <value> if alpha == 1.0
 
         (value * 255.0).clamp(0.0, 255.0) as u8
     };

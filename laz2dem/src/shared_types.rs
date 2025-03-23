@@ -115,7 +115,9 @@ impl FromStr for Shadings {
                             Err(())
                         } else {
                             params[2].parse::<f64>().map_or(Err(()), |azimuth| {
-                                Ok(ShadingMethod::Igor(IgorShadingParams { azimuth }))
+                                Ok(ShadingMethod::Igor(IgorShadingParams {
+                                    azimuth: azimuth.to_radians(),
+                                }))
                             })
                         }
                     }
@@ -130,8 +132,8 @@ impl FromStr for Shadings {
                             match (azimuth, altitude) {
                                 (Ok(azimuth), Ok(altitude)) => {
                                     Ok(ShadingMethod::Oblique(ObliqueShadingParams {
-                                        azimuth,
-                                        altitude,
+                                        azimuth: azimuth.to_radians(),
+                                        altitude: altitude.to_radians(),
                                     }))
                                 }
                                 _ => Err(()),
@@ -143,7 +145,9 @@ impl FromStr for Shadings {
                             Err(())
                         } else {
                             params[2].parse::<f64>().map_or(Err(()), |altitude| {
-                                Ok(ShadingMethod::Slope(SlopeShadingParams { altitude }))
+                                Ok(ShadingMethod::Slope(SlopeShadingParams {
+                                    altitude: altitude.to_radians(),
+                                }))
                             })
                         }
                     }

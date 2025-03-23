@@ -186,36 +186,13 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
                                 }
                             }
 
-                            // let sun_azimuth_rad = 315_f64.to_radians();
-                            // let sun_zenith_rad = 45_f64.to_radians();
-
                             let img = compute_hillshade(
                                 &img,
                                 options.z_factor,
                                 height_pixels as usize,
                                 width_pixels as usize,
-                                |aspect_rad, slope_rad| {
-                                    shade(
-                                        aspect_rad,
-                                        slope_rad,
-                                        options.shadings.0.as_ref(),
-                                        // &[
-                                        //     (-120.0, 0.8, 0x203060),
-                                        //     (60.0, 0.7, 0xFFEE00),
-                                        //     (-45.0, 1.0, 0x000000),
-                                        // ],
-                                        1.0,
-                                        0.0,
-                                    )
-
-                                    // // Compute illumination using sun angle
-                                    // let illumination = sun_zenith_rad.cos() * slope_rad.cos()
-                                    //     + sun_zenith_rad.sin() * slope_rad.sin() * (sun_azimuth_rad - aspect_rad).cos();
-
-                                    // // Scale to 0-255
-                                    // let shade = (illumination * 255.0).clamp(0.0, 255.0) as u8;
-
-                                    // [shade, shade, shade]
+                                |aspect, slope| {
+                                    shade(aspect, slope, options.shadings.0.as_ref(), 1.0, 0.0)
                                 },
                             );
 
