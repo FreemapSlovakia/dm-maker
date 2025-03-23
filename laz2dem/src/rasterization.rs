@@ -156,27 +156,25 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
                                 triangulation.insert(point).unwrap();
                             }
 
-                            let bbox_3857 = tile_meta.bbox;
+                            let bbox = tile_meta.bbox;
 
                             let pixels_per_meter = options.pixels_per_meter();
 
-                            let width_pixels =
-                                (bbox_3857.width() * pixels_per_meter).round() as u32;
+                            let width_pixels = (bbox.width() * pixels_per_meter).round() as u32;
 
-                            let height_pixels =
-                                (bbox_3857.height() * pixels_per_meter).round() as u32;
+                            let height_pixels = (bbox.height() * pixels_per_meter).round() as u32;
 
                             let mut img = Vec::new();
 
                             let natural_neighbor = triangulation.natural_neighbor();
 
                             for y in 0..height_pixels {
-                                let cy = bbox_3857.min_y
-                                    + y as f64 * bbox_3857.height() / height_pixels as f64;
+                                let cy =
+                                    bbox.min_y + y as f64 * bbox.height() / height_pixels as f64;
 
                                 for x in 0..width_pixels {
-                                    let cx = bbox_3857.min_x
-                                        + x as f64 * bbox_3857.width() / width_pixels as f64;
+                                    let cx =
+                                        bbox.min_x + x as f64 * bbox.width() / width_pixels as f64;
 
                                     img.push(
                                         natural_neighbor
