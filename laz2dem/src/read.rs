@@ -31,26 +31,38 @@ pub fn read(options: &Options) -> Vec<TileMeta> {
         return tile_metas;
     };
 
-    let proj_3857_to_8353 = Proj::new_known_crs("EPSG:3857", "EPSG:8353", None)
-        .expect("Failed to create PROJ transformation");
+    let bbox_unprojected = options.source_projection.as_ref().map(|source_projection| {
+        let bbox_unprojected: BBox = Proj::new_known_crs("EPSG:3857", source_projection, None)
+            .expect("Failed to create PROJ transformation")
+            .transform_bounds(
+                options.bbox.min_x,
+                options.bbox.min_y,
+                options.bbox.max_x,
+                options.bbox.max_y,
+                11,
+            )
+            .unwrap()
+            .into();
 
-    let bbox_8353: BBox = proj_3857_to_8353
-        .transform_bounds(
-            options.bbox.min_x,
-            options.bbox.min_y,
-            options.bbox.max_x,
-            options.bbox.max_y,
-            11,
-        )
-        .unwrap()
-        .into();
+        bbox_unprojected
+    });
 
     let conn = Connection::open(path).unwrap();
 
     let mut stmt = conn.prepare("SELECT file FROM laz_index WHERE max_x >= ?1 AND min_x <= ?3 AND max_y >= ?2 AND min_y <= ?4").unwrap();
 
     let rows = stmt
-        .query_map(<[f64; 4]>::from(bbox_8353), |row| row.get::<_, String>(0))
+        .query_map(
+            <[f64; 4]>::from(bbox_unprojected.unwrap_or_else(|| {
+                BBox::new(
+                    options.bbox.min_x,
+                    options.bbox.min_y,
+                    options.bbox.max_x,
+                    options.bbox.max_y,
+                )
+            })),
+            |row| row.get::<_, String>(0),
+        )
         .unwrap();
 
     let files: Vec<String> = rows.map(|row| row.unwrap()).collect();
@@ -59,8 +71,10 @@ pub fn read(options: &Options) -> Vec<TileMeta> {
 
     files.par_iter().for_each_init(
         || {
-            Proj::new_known_crs("EPSG:8353", "EPSG:3857", None)
-                .expect("Failed to create PROJ transformation")
+            options.source_projection.as_ref().map(|source_projection| {
+                Proj::new_known_crs("EPSG:3857", source_projection, None)
+                    .expect("Failed to create PROJ transformation")
+            })
         },
         |proj, file| {
             println!("READ {file}");
@@ -74,11 +88,16 @@ pub fn read(options: &Options) -> Vec<TileMeta> {
                     continue;
                 }
 
-                if !bbox_8353.contains(point.x, point.y) {
-                    continue;
+                if let Some(bbox_unprojected) = bbox_unprojected {
+                    if !bbox_unprojected.contains(point.x, point.y) {
+                        continue;
+                    }
                 }
 
-                let (x, y) = proj.convert((point.x, point.y)).unwrap();
+                let (x, y) = proj.as_ref().map_or_else(
+                    || (point.x, point.y),
+                    |proj| proj.convert((point.x, point.y)).unwrap(),
+                );
 
                 if !options.bbox.contains(x, y) {
                     continue;

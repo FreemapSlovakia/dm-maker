@@ -81,6 +81,7 @@ pub fn shade(
     shadings: &[Shading],
     contrast: f64,
     brightness: f64,
+    background: u32,
 ) -> [u8; 3] {
     // Compute modified hillshade values
     let mods: Vec<_> = shadings
@@ -128,7 +129,9 @@ pub fn shade(
 
         let value = contrast * ((sum / norm) - 0.5) + 0.5 + brightness;
 
-        let value = value + (1.0 - value) * (1.0 - alpha); // 1.0 if alpha == 0.0 | <value> if alpha == 1.0
+        // screen blending mode
+        let value =
+            value + (f64::from((background >> shift) & 0xFF_u32) / 255.0 - value) * (1.0 - alpha);
 
         (value * 255.0).clamp(0.0, 255.0) as u8
     };

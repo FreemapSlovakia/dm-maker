@@ -1,7 +1,7 @@
 use crate::shared_types::{Shadings, Source};
 use clap::{ArgGroup, Parser};
 use maptile::{bbox::BBox, constants::WEB_MERCATOR_EXTENT};
-use std::path::PathBuf;
+use std::{num::ParseIntError, path::PathBuf, str::FromStr};
 
 #[derive(Clone, Debug, Parser, PartialEq)]
 #[clap(group = ArgGroup::new("exclusive").required(true))]
@@ -44,9 +44,22 @@ pub struct Options {
     #[clap(long, group = "exclusive")]
     pub laz_index_db: Option<PathBuf>,
 
+    /// Projection of points if reading from *.laz; default is EPSG:3857
+    #[clap(long, conflicts_with = "laz_tile_db")]
+    pub source_projection: Option<String>,
+
     /// EPSG:3857 bounding box to render
     #[clap(long)]
     pub bbox: BBox,
+
+    #[clap(long, default_value_t = 1.0)]
+    pub contrast: f64,
+
+    #[clap(long, default_value_t = 0.0)]
+    pub brightness: f64,
+
+    #[clap(long, default_value = "FFFFFFFF")]
+    pub background_color: Rgba,
 }
 
 impl Options {
@@ -63,5 +76,16 @@ impl Options {
             },
             Source::LazIndexDb,
         )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rgba(pub u32);
+
+impl FromStr for Rgba {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        u32::from_str_radix(s, 16).map(Self)
     }
 }

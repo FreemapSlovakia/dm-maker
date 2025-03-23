@@ -192,7 +192,14 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
                                 height_pixels as usize,
                                 width_pixels as usize,
                                 |aspect, slope| {
-                                    shade(aspect, slope, options.shadings.0.as_ref(), 1.0, 0.0)
+                                    shade(
+                                        aspect,
+                                        slope,
+                                        options.shadings.0.as_ref(),
+                                        options.contrast,
+                                        options.brightness,
+                                        options.background_color.0,
+                                    )
                                 },
                             );
 
