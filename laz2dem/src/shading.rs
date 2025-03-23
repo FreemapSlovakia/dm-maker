@@ -84,10 +84,10 @@ pub fn shade(
     background: u32,
 ) -> [u8; 3] {
     // Compute modified hillshade values
-    let mods: Vec<_> = shadings
+    let shadows: Vec<_> = shadings
         .iter()
         .map(|shading| {
-            let value = match &shading.method {
+            let intensity = match &shading.method {
                 ShadingMethod::Igor(IgorShadingParams { azimuth }) => {
                     let aspect_diff = difference_between_angles(aspect, azimuth + FRAC_PI_2, TAU);
 
@@ -110,18 +110,18 @@ pub fn shade(
 
             let alpha = (shading.color & 0xFF) as f64 / 255.0;
 
-            alpha * (1.0 - value)
+            alpha * (1.0 - intensity)
         })
         .collect();
 
     // Normalization factor
-    let norm = f64::MIN_POSITIVE + mods.iter().sum::<f64>();
+    let norm = f64::MIN_POSITIVE + shadows.iter().sum::<f64>();
 
-    let alpha = 1.0 - mods.iter().map(|m| 1.0 - m).product::<f64>();
+    let alpha = 1.0 - shadows.iter().map(|m| 1.0 - m).product::<f64>();
 
     // Compute each channel
     let compute_channel = |shift| {
-        let sum: f64 = mods
+        let sum: f64 = shadows
             .iter()
             .enumerate()
             .map(|(i, m)| m * f64::from((shadings[i].color >> shift) & 0xFF_u32) / 255.0)
