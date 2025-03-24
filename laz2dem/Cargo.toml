@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-image = { version = "0.25.5", default-features = false, features = ["jpeg"] }
+image = { version = "0.25.5", default-features = false, features = [
+  "jpeg",
+  "png",
+] }
 las = { version = "0.9.3", features = ["laz-parallel"] }
 proj = "0.29.0"
 rayon = "1.10.0"

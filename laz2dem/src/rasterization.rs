@@ -1,5 +1,5 @@
 use crate::{
-    options::Options,
+    options::{Format, Options},
     progress::Progress,
     schema::create_schema,
     shading::{compute_hillshade, shade},
@@ -7,9 +7,9 @@ use crate::{
 };
 use core::f64;
 use image::{
-    GenericImage, ImageBuffer, Rgb, RgbImage,
-    codecs::jpeg::JpegEncoder,
-    imageops::{FilterType, crop_imm},
+    GenericImage, Pixel, Rgb, RgbImage, RgbaImage,
+    codecs::{jpeg::JpegEncoder, png::PngEncoder},
+    imageops::{FilterType, crop_imm, resize},
 };
 use las::Reader;
 use maptile::tile::Tile;
@@ -45,10 +45,10 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
         create_schema(
             &conn,
             &[
-                ("name", "HS"), // TODO
+                ("name", "Hillshade"), // TODO
                 ("minzoom", "0"),
                 ("maxzoom", options.zoom_level.to_string().as_ref()),
-                ("format", "jpeg"),
+                ("format", &options.format.to_string()),
                 (
                     "bounds",
                     &format!(
@@ -77,7 +77,7 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
     thread::scope(|scope| {
         let jobs_len = state.lock().unwrap().jobs.len();
 
-        let for_overviews = Arc::new(Mutex::new(HashMap::<Tile, ImageBuffer<_, _>>::new()));
+        let for_overviews = Arc::new(Mutex::new(HashMap::<Tile, RgbaImage>::new()));
 
         for _ in 0..(jobs_len.min(available_parallelism().unwrap().get())) {
             let state = Arc::clone(&state);
@@ -87,11 +87,22 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
             let for_overviews = Arc::clone(&for_overviews);
 
             scope.spawn(move || {
-                let save_tile = |tile: Tile, img: ImageBuffer<Rgb<u8>, Vec<u8>>| {
+                let save_tile = |tile: Tile, img: RgbaImage| {
                     let mut buffer = vec![];
 
-                    img.write_with_encoder(JpegEncoder::new(Cursor::new(&mut buffer)))
-                        .unwrap();
+                    match options.format {
+                        Format::JPEG => {
+                            let img = rgba_to_rgb(&img, options.background_color.0);
+                            img.write_with_encoder(JpegEncoder::new_with_quality(
+                                Cursor::new(&mut buffer),
+                                options.jpeg_quality,
+                            ))
+                            .unwrap()
+                        }
+                        Format::PNG => img
+                            .write_with_encoder(PngEncoder::new(Cursor::new(&mut buffer)))
+                            .unwrap(),
+                    }
 
                     for_overviews.lock().unwrap().insert(tile, img);
 
@@ -196,7 +207,6 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
                                         options.shadings.0.as_ref(),
                                         options.contrast,
                                         options.brightness,
-                                        options.background_color.0,
                                     )
                                 },
                             );
@@ -240,7 +250,7 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
 
                             drop(for_overviews);
 
-                            let mut tile_img = RgbImage::new(
+                            let mut tile_img = RgbaImage::new(
                                 u32::from(options.tile_size) << 1,
                                 u32::from(options.tile_size) << 1,
                             );
@@ -255,7 +265,7 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
                                     .unwrap();
                             }
 
-                            let img = image::imageops::resize(
+                            let img = resize(
                                 &tile_img,
                                 u32::from(options.tile_size),
                                 u32::from(options.tile_size),
@@ -269,4 +279,22 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
             });
         }
     });
+}
+
+fn rgba_to_rgb(img: &RgbaImage, background: Rgb<u8>) -> RgbImage {
+    let (width, height) = img.dimensions();
+
+    let mut rgb_img = RgbImage::new(width, height);
+
+    for (x, y, &rgba) in img.enumerate_pixels() {
+        let mut base = background.to_rgba();
+
+        base.channels_mut()[3] = 255;
+
+        base.blend(&rgba);
+
+        rgb_img.put_pixel(x, y, base.to_rgb());
+    }
+
+    rgb_img
 }

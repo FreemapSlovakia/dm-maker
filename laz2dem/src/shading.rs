@@ -1,7 +1,7 @@
 use crate::shared_types::{
     IgorShadingParams, ObliqueShadingParams, Shading, ShadingMethod, SlopeShadingParams,
 };
-use image::RgbImage;
+use image::{Rgba, RgbaImage};
 use std::f64::{
     self,
     consts::{FRAC_PI_2, PI, TAU},
@@ -13,17 +13,17 @@ pub fn compute_hillshade<F>(
     rows: usize,
     cols: usize,
     compute_rgb: F,
-) -> RgbImage
+) -> RgbaImage
 where
-    F: Fn(f64, f64) -> [u8; 3],
+    F: Fn(f64, f64) -> Rgba<u8>,
 {
-    let mut hillshade = RgbImage::new(cols as u32, rows as u32);
+    let mut hillshade = RgbaImage::new(cols as u32, rows as u32);
 
     for y in 1..rows - 1 {
         for x in 1..cols - 1 {
             let (slope, aspect) = compute_slope_and_aspect(elevation, z_factor, cols, x, y);
 
-            hillshade.get_pixel_mut(x as u32, (rows - y) as u32).0 = compute_rgb(aspect, slope);
+            *hillshade.get_pixel_mut(x as u32, (rows - y) as u32) = compute_rgb(aspect, slope);
         }
     }
 
@@ -81,8 +81,7 @@ pub fn shade(
     shadings: &[Shading],
     contrast: f64,
     brightness: f64,
-    background: u32,
-) -> [u8; 3] {
+) -> Rgba<u8> {
     // Compute modified hillshade values
     let shadows: Vec<_> = shadings
         .iter()
@@ -129,18 +128,15 @@ pub fn shade(
 
         let value = contrast * ((sum / norm) - 0.5) + 0.5 + brightness;
 
-        // screen blending mode
-        let value =
-            value + (f64::from((background >> shift) & 0xFF_u32) / 255.0 - value) * (1.0 - alpha);
-
         (value * 255.0).clamp(0.0, 255.0) as u8
     };
 
-    let r = compute_channel(24);
-    let g = compute_channel(16);
-    let b = compute_channel(8);
-
-    [r, g, b]
+    Rgba([
+        compute_channel(24),
+        compute_channel(16),
+        compute_channel(8),
+        (alpha * 255.0).clamp(0.0, 255.0) as u8,
+    ])
 }
 
 fn normalize_angle(angle: f64, normalizer: f64) -> f64 {

@@ -1,7 +1,7 @@
 use crate::shared_types::{Shadings, Source};
-use clap::{ArgGroup, Parser};
+use clap::{ArgGroup, Parser, ValueEnum};
 use maptile::{bbox::BBox, constants::WEB_MERCATOR_EXTENT};
-use std::{num::ParseIntError, path::PathBuf, str::FromStr};
+use std::{fmt::Display, num::ParseIntError, path::PathBuf, str::FromStr};
 
 #[derive(Clone, Debug, Parser, PartialEq)]
 #[clap(group = ArgGroup::new("exclusive").required(true))]
@@ -58,8 +58,15 @@ pub struct Options {
     #[clap(long, default_value_t = 0.0)]
     pub brightness: f64,
 
-    #[clap(long, default_value = "FFFFFFFF")]
-    pub background_color: Rgba,
+    // Background color when writing to JPG
+    #[clap(long, default_value = "FFFFFF")]
+    pub background_color: Rgb,
+
+    #[clap(long, default_value_t = 80)]
+    pub jpeg_quality: u8,
+
+    #[clap(long, value_enum, default_value_t = Format::JPEG)]
+    pub format: Format,
 }
 
 impl Options {
@@ -80,12 +87,35 @@ impl Options {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Rgba(pub u32);
+pub struct Rgb(pub image::Rgb<u8>);
 
-impl FromStr for Rgba {
+impl FromStr for Rgb {
     type Err = ParseIntError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        u32::from_str_radix(s, 16).map(Self)
+        u32::from_str_radix(s, 16).map(|v| {
+            let [_, r, g, b] = v.to_be_bytes();
+
+            Self(image::Rgb([r, g, b]))
+        })
+    }
+}
+
+#[derive(ValueEnum, Debug, Clone, PartialEq)]
+pub enum Format {
+    JPEG,
+    PNG,
+}
+
+impl Display for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Format::JPEG => "jpeg",
+                Format::PNG => "png",
+            }
+        )
     }
 }
