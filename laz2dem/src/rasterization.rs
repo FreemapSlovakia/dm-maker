@@ -69,7 +69,7 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
 
     let state = Arc::new(Mutex::new(Progress::new(
         jobs,
-        options.supertile_zoom_offset,
+        options.zoom_level - options.unit_zoom_level,
     )));
 
     let source = &options.source();
@@ -211,7 +211,8 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
                                 },
                             );
 
-                            let supertile_zoom_offset = options.supertile_zoom_offset;
+                            let supertile_zoom_offset =
+                                options.zoom_level - options.unit_zoom_level;
 
                             let mut tiles = tile_meta.tile.descendants(supertile_zoom_offset);
 

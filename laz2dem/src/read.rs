@@ -14,18 +14,15 @@ use std::sync::Mutex;
 pub fn read(options: &Options) -> Vec<TileMeta> {
     let buffer_m = options.buffer as f64 / options.pixels_per_meter();
 
-    let tile_metas: Vec<_> = bbox_covered_tiles(
-        &options.bbox,
-        options.zoom_level - options.supertile_zoom_offset,
-    )
-    .map(|tile| TileMeta {
-        tile,
-        bbox: tile
-            .bounds(options.tile_size << options.supertile_zoom_offset)
-            .to_extended(buffer_m),
-        points: Mutex::new(Vec::<PointWithHeight>::new()),
-    })
-    .collect();
+    let tile_metas: Vec<_> = bbox_covered_tiles(&options.bbox, options.unit_zoom_level)
+        .map(|tile| TileMeta {
+            tile,
+            bbox: tile
+                .bounds(options.tile_size << (options.zoom_level - options.unit_zoom_level))
+                .to_extended(buffer_m),
+            points: Mutex::new(Vec::<PointWithHeight>::new()),
+        })
+        .collect();
 
     let Source::LazIndexDb(path) = options.source() else {
         return tile_metas;

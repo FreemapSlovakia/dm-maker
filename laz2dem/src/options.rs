@@ -11,19 +11,19 @@ use std::{
 #[derive(Clone, Debug, Parser, PartialEq)]
 #[clap(group = ArgGroup::new("exclusive").required(true))]
 pub struct Options {
-    // Output mbtiles file
+    /// Output mbtiles file
     pub output: PathBuf,
 
-    /// Zoom level of tiles
+    /// Max zoom level of tiles to generate
     #[clap(long)]
     pub zoom_level: u8,
 
     /// Shadings; `+` separated componets of shading. Shading component is <method>,method_param1[,method_param2...].
     /// ‎
     /// Methods:
-    /// - oblique - params: azimuth in degrees
-    /// - igor - params: azimuth in degrees, alitutde in degrees
-    /// - slope - params: alitutde in degrees
+    /// - `oblique` - params: azimuth in degrees
+    /// - `igor` - params: azimuth in degrees, alitutde in degrees
+    /// - `slope` - params: alitutde in degrees
     #[clap(long, verbatim_doc_comment)]
     pub shadings: Shadings,
 
@@ -31,21 +31,24 @@ pub struct Options {
     #[clap(long, default_value_t = 1.0)]
     pub z_factor: f64,
 
-    /// TODO explain
-    #[clap(long, default_value_t = 0)]
-    pub supertile_zoom_offset: u8,
+    /// If LAZ tile DB is used then use value of `--zoom-level` argument of `laztile`
+    /// If LAZ index is used then use zoom level to determine size of tile to process at once.
+    #[clap(long, default_value_t = 16)]
+    pub unit_zoom_level: u8,
 
     /// Tile size
     #[clap(long, default_value_t = 256)]
     pub tile_size: u16,
 
-    /// Buffer size in pixels
+    /// Buffer size in pixels to prevent artifacts at tieledges
     #[clap(long, default_value_t = 40)]
     pub buffer: u32,
 
+    /// Source as LAZ tile DB
     #[clap(long, group = "exclusive")]
     pub laz_tile_db: Option<PathBuf>,
 
+    /// Source as LAZ index DB referring *.laz files
     #[clap(long, group = "exclusive")]
     pub laz_index_db: Option<PathBuf>,
 
@@ -57,19 +60,23 @@ pub struct Options {
     #[clap(long)]
     pub bbox: BBox,
 
+    /// Increase (> 1.0) or decrease (< 1.0) contrast. Use value higher than 0.0.
     #[clap(long, default_value_t = 1.0)]
     pub contrast: f64,
 
+    /// Increase (> 0.0) or decrease (< 0.0) brightness. Use value between -1.0 and 1.0.
     #[clap(long, default_value_t = 0.0)]
     pub brightness: f64,
 
-    // Background color when writing to JPG
+    /// Background color when writing to JPEG
     #[clap(long, default_value = "FFFFFF")]
     pub background_color: Rgb,
 
+    /// Quality from 0 to 100 when writing to JPEG
     #[clap(long, default_value_t = 80)]
     pub jpeg_quality: u8,
 
+    /// Tile image format. For alpha (transparency) support use `png`.
     #[clap(long, value_enum, default_value_t = Format::JPEG)]
     pub format: Format,
 }
