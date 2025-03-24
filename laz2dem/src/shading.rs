@@ -82,16 +82,16 @@ pub fn shade(
     contrast: f64,
     brightness: f64,
 ) -> Rgba<u8> {
-    let shadows: Vec<_> = shadings
+    let alphas: Vec<_> = shadings
         .iter()
         .map(|shading| {
             let intensity = match &shading.method {
                 ShadingMethod::Igor(IgorShadingParams { azimuth }) => {
-                    let aspect_diff = difference_between_angles(aspect, azimuth + FRAC_PI_2, TAU);
+                    let aspect_diff = difference_between_angles(aspect, azimuth - FRAC_PI_2, TAU);
 
                     let aspect_strength = 1.0 - aspect_diff / PI;
 
-                    1.0 - slope * 2.0 * aspect_strength
+                    slope * 2.0 * aspect_strength
                 }
                 ShadingMethod::Oblique(ObliqueShadingParams { azimuth, altitude }) => {
                     let zenith = FRAC_PI_2 - altitude;
@@ -108,25 +108,25 @@ pub fn shade(
 
             let alpha = (shading.color & 0xFF) as f64 / 255.0;
 
-            alpha * (1.0 - intensity)
+            alpha * intensity
         })
         .collect();
 
-    let normalization_factor = f64::MIN_POSITIVE + shadows.iter().sum::<f64>();
-
-    let alpha = 1.0 - shadows.iter().map(|shadow| 1.0 - shadow).product::<f64>();
+    let alphas_sum = f64::MIN_POSITIVE + alphas.iter().sum::<f64>();
 
     let compute_channel = |shift| {
-        let sum: f64 = shadows
+        let sum: f64 = alphas
             .iter()
             .enumerate()
-            .map(|(i, shadow)| shadow * f64::from((shadings[i].color >> shift) & 0xFF_u32) / 255.0)
+            .map(|(i, alpha)| alpha * f64::from((shadings[i].color >> shift) & 0xFF_u32) / 255.0)
             .sum();
 
-        let value = contrast * ((sum / normalization_factor) - 0.5) + 0.5 + brightness;
+        let value = contrast * ((sum / alphas_sum) - 0.5) + 0.5 + brightness;
 
         (value * 255.0).clamp(0.0, 255.0) as u8
     };
+
+    let alpha = 1.0 - alphas.iter().map(|alpha| 1.0 - alpha).product::<f64>();
 
     Rgba([
         compute_channel(24),

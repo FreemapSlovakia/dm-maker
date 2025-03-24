@@ -21,8 +21,8 @@ pub struct Options {
     /// Shadings; `+` separated componets of shading. Shading component is <method>,method_param1[,method_param2...].
     /// ‎
     /// Methods:
-    /// - `oblique` - params: azimuth in degrees
-    /// - `igor` - params: azimuth in degrees, alitutde in degrees
+    /// - `oblique` - params: azimuth in degrees, alitutde in degrees
+    /// - `igor` - params: azimuth in degrees
     /// - `slope` - params: alitutde in degrees
     #[clap(long, verbatim_doc_comment)]
     pub shadings: Shadings,
