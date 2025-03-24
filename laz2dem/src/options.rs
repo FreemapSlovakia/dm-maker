@@ -1,7 +1,12 @@
 use crate::shared_types::{Shadings, Source};
 use clap::{ArgGroup, Parser, ValueEnum};
 use maptile::{bbox::BBox, constants::WEB_MERCATOR_EXTENT};
-use std::{fmt::Display, num::ParseIntError, path::PathBuf, str::FromStr};
+use std::{
+    fmt::{Display, Formatter},
+    num::ParseIntError,
+    path::PathBuf,
+    str::FromStr,
+};
 
 #[derive(Clone, Debug, Parser, PartialEq)]
 #[clap(group = ArgGroup::new("exclusive").required(true))]
@@ -92,9 +97,9 @@ pub struct Rgb(pub image::Rgb<u8>);
 impl FromStr for Rgb {
     type Err = ParseIntError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        u32::from_str_radix(s, 16).map(|v| {
-            let [_, r, g, b] = v.to_be_bytes();
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
+        u32::from_str_radix(string, 16).map(|color| {
+            let [_, r, g, b] = color.to_be_bytes();
 
             Self(image::Rgb([r, g, b]))
         })
@@ -108,9 +113,9 @@ pub enum Format {
 }
 
 impl Display for Format {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
-            f,
+            formatter,
             "{}",
             match self {
                 Format::JPEG => "jpeg",

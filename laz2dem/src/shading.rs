@@ -82,7 +82,6 @@ pub fn shade(
     contrast: f64,
     brightness: f64,
 ) -> Rgba<u8> {
-    // Compute modified hillshade values
     let shadows: Vec<_> = shadings
         .iter()
         .map(|shading| {
@@ -113,12 +112,10 @@ pub fn shade(
         })
         .collect();
 
-    // Normalization factor
-    let norm = f64::MIN_POSITIVE + shadows.iter().sum::<f64>();
+    let normalization_factor = f64::MIN_POSITIVE + shadows.iter().sum::<f64>();
 
     let alpha = 1.0 - shadows.iter().map(|m| 1.0 - m).product::<f64>();
 
-    // Compute each channel
     let compute_channel = |shift| {
         let sum: f64 = shadows
             .iter()
@@ -126,7 +123,7 @@ pub fn shade(
             .map(|(i, m)| m * f64::from((shadings[i].color >> shift) & 0xFF_u32) / 255.0)
             .sum();
 
-        let value = contrast * ((sum / norm) - 0.5) + 0.5 + brightness;
+        let value = contrast * ((sum / normalization_factor) - 0.5) + 0.5 + brightness;
 
         (value * 255.0).clamp(0.0, 255.0) as u8
     };
