@@ -1,5 +1,5 @@
 use crate::{
-    options::{Format, Options},
+    options::{ExistingFileAction, Format, Options},
     progress::Progress,
     schema::create_schema,
     shading::{compute_hillshade, shade},
@@ -10,24 +10,44 @@ use image::{
     GenericImage, Pixel, Rgb, RgbImage, RgbaImage,
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
     imageops::{FilterType, crop_imm, resize},
+    load_from_memory_with_format,
 };
 use las::Reader;
 use maptile::tile::Tile;
 use proj::Proj;
-use rusqlite::Connection;
+use rusqlite::{Connection, Error, ErrorCode, OpenFlags};
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use std::{
     collections::HashMap,
-    fs::remove_file,
+    fs::{exists, remove_file},
     io::Cursor,
     sync::{Arc, Mutex},
     thread::{self, available_parallelism},
 };
 
+const SELECT_TILE_EXISTS_SQL: &str =
+    "SELECT 1 FROM tiles WHERE zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3";
+
+const SELECT_TILE_SQL: &str =
+    "SELECT tile_data FROM tiles WHERE zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3";
+
+const INSERT_TILE_SQL: &str = "INSERT INTO tiles VALUES (?1, ?2, ?3, ?4)";
+
+const SELECT_LAZTILE_SQL: &str = "SELECT data FROM tiles WHERE x = ?1 AND y = ?2";
+
 pub fn rasterize(options: &Options, jobs: Vec<Job>) {
     let output = &options.output;
 
-    remove_file(output).unwrap_or(());
+    let cont = exists(output).unwrap()
+        && match options.existing_file_action {
+            Some(ExistingFileAction::Overwrite) => {
+                remove_file(output).unwrap();
+
+                false
+            }
+            Some(ExistingFileAction::Continue) => true,
+            None => panic!("Output file already exitsts. Specify --existing-file-action."),
+        };
 
     let conn = Connection::open(output).unwrap();
 
@@ -42,23 +62,25 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
 
         proj_3857_to_4326.project_array(&mut bounds, false).unwrap();
 
-        create_schema(
-            &conn,
-            &[
-                ("name", "Hillshade"), // TODO
-                ("minzoom", "0"),
-                ("maxzoom", options.zoom_level.to_string().as_ref()),
-                ("format", &options.format.to_string()),
-                (
-                    "bounds",
-                    &format!(
-                        "{},{},{},{}",
-                        bounds[0].0, bounds[0].1, bounds[1].0, bounds[1].1
+        if !cont {
+            create_schema(
+                &conn,
+                &[
+                    ("name", "Hillshade"), // TODO
+                    ("minzoom", "0"),
+                    ("maxzoom", options.zoom_level.to_string().as_ref()),
+                    ("format", &options.format.to_string()),
+                    (
+                        "bounds",
+                        &format!(
+                            "{},{},{},{}",
+                            bounds[0].0, bounds[0].1, bounds[1].0, bounds[1].1
+                        ),
                     ),
-                ),
-            ],
-        )
-        .unwrap();
+                ],
+            )
+            .unwrap();
+        }
     }
 
     conn.pragma_update(None, "synchronous", "OFF").unwrap();
@@ -72,7 +94,14 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
         options.zoom_level - options.unit_zoom_level,
     )));
 
-    let source = &options.source();
+    let laztile_conn = match options.source() {
+        Source::LazTileDb(path_buf) => Some(Arc::new(Mutex::new(
+            Connection::open_with_flags(path_buf, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap(),
+        ))),
+        Source::LazIndexDb(_) => None,
+    };
+
+    let supertile_zoom_offset = options.zoom_level - options.unit_zoom_level;
 
     thread::scope(|scope| {
         let jobs_len = state.lock().unwrap().jobs.len();
@@ -85,6 +114,8 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
             let conn = Arc::clone(&conn);
 
             let for_overviews = Arc::clone(&for_overviews);
+
+            let laztile_conn = laztile_conn.clone();
 
             scope.spawn(move || {
                 let save_tile = |tile: Tile, img: RgbaImage| {
@@ -106,13 +137,21 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
 
                     for_overviews.lock().unwrap().insert(tile, img);
 
-                    conn.lock()
-                        .unwrap()
-                        .execute(
-                            "INSERT INTO tiles VALUES (?1, ?2, ?3, ?4)",
-                            (tile.zoom, tile.x, tile.reversed_y(), buffer),
-                        )
-                        .unwrap();
+                    let res = conn.lock().unwrap().execute(
+                        INSERT_TILE_SQL,
+                        (tile.zoom, tile.x, tile.reversed_y(), buffer),
+                    );
+
+                    match res {
+                        Err(Error::SqliteFailure(ref err, _))
+                            if err.code == ErrorCode::ConstraintViolation =>
+                        {
+                            println!("DUPLICATE");
+                        }
+                        _ => {
+                            res.unwrap();
+                        }
+                    }
 
                     state.lock().unwrap().done(tile);
                 };
@@ -122,17 +161,46 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
                         break;
                     };
 
-                    println!("Processing {:?}", job);
+                    // println!("Processing {:?}", job);
+
+                    if cont {
+                        let (tile, tiles) = match job {
+                            Job::Rasterize(ref tile_meta) => (
+                                tile_meta.tile,
+                                tile_meta.tile.descendants(supertile_zoom_offset),
+                            ),
+                            Job::Overview(tile) => (tile, vec![tile]),
+                        };
+
+                        let conn = conn.lock().unwrap();
+
+                        let mut stmt = conn.prepare(SELECT_TILE_EXISTS_SQL).unwrap();
+
+                        let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
+
+                        if rows.next().unwrap().is_some() {
+                            for tile in tiles {
+                                for_overviews
+                                    .lock()
+                                    .unwrap()
+                                    .insert(tile, RgbaImage::default());
+
+                                state.lock().unwrap().done(tile);
+                            }
+
+                            continue;
+                        }
+                    }
 
                     match job {
                         Job::Rasterize(tile_meta) => {
-                            let points = match source {
-                                Source::LazTileDb(path_buf) => {
-                                    let conn = Connection::open(path_buf).unwrap();
+                            let points = laztile_conn.as_ref().map_or_else(
+                                || tile_meta.points.into_inner().unwrap(),
+                                |laztile_conn| {
+                                    let laztile_conn = laztile_conn.lock().unwrap();
 
-                                    let mut stmt = conn
-                                        .prepare("SELECT data FROM tiles WHERE x = ?1 AND y = ?2")
-                                        .unwrap();
+                                    let mut stmt =
+                                        laztile_conn.prepare(SELECT_LAZTILE_SQL).unwrap();
 
                                     let mut rows =
                                         stmt.query((tile_meta.tile.x, tile_meta.tile.y)).unwrap();
@@ -157,9 +225,14 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
                                             height: point.z,
                                         })
                                         .collect()
-                                }
-                                Source::LazIndexDb(_) => tile_meta.points.into_inner().unwrap(),
-                            };
+                                },
+                            );
+
+                            if points.is_empty() {
+                                state.lock().unwrap().done(tile_meta.tile);
+
+                                continue;
+                            }
 
                             let mut triangulation = DelaunayTriangulation::<PointWithHeight>::new();
 
@@ -211,9 +284,6 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
                                 },
                             );
 
-                            let supertile_zoom_offset =
-                                options.zoom_level - options.unit_zoom_level;
-
                             let mut tiles = tile_meta.tile.descendants(supertile_zoom_offset);
 
                             tiles.sort_by(|a, b| a.y.cmp(&b.y).then_with(|| a.x.cmp(&b.x)));
@@ -242,21 +312,52 @@ pub fn rasterize(options: &Options, jobs: Vec<Job>) {
 
                             let imgs: Vec<_> = tile
                                 .children()
-                                .iter()
+                                .into_iter()
                                 .enumerate()
                                 .filter_map(|(i, tile)| {
-                                    for_overviews.remove(tile).map(|img| (i, img))
+                                    for_overviews.remove(&tile).map(|img| (i, tile, img))
                                 })
                                 .collect();
 
                             drop(for_overviews);
+
+                            if imgs.is_empty() {
+                                state.lock().unwrap().done(tile);
+
+                                continue;
+                            }
 
                             let mut tile_img = RgbaImage::new(
                                 u32::from(options.tile_size) << 1,
                                 u32::from(options.tile_size) << 1,
                             );
 
-                            for (i, img) in imgs {
+                            for (i, tile, img) in imgs {
+                                let img = if cont && img.width() == 0 {
+                                    let data: Vec<u8> = {
+                                        let conn = conn.lock().unwrap();
+
+                                        let mut stmt = conn.prepare(SELECT_TILE_SQL).unwrap();
+
+                                        let mut rows = stmt
+                                            .query((tile.zoom, tile.x, tile.reversed_y()))
+                                            .unwrap();
+
+                                        let row = rows.next().unwrap().unwrap();
+
+                                        row.get(0).unwrap()
+                                    };
+
+                                    load_from_memory_with_format(
+                                        data.as_slice(),
+                                        image::ImageFormat::Jpeg, // TODO also support PNG
+                                    )
+                                    .unwrap()
+                                    .to_rgba8()
+                                } else {
+                                    img
+                                };
+
                                 tile_img
                                     .copy_from(
                                         &img,

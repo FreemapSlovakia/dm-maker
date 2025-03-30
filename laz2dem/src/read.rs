@@ -7,7 +7,7 @@ use las::{Reader, point::Classification};
 use maptile::{bbox::BBox, utils::bbox_covered_tiles};
 use proj::Proj;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use spade::Point2;
 use std::sync::Mutex;
 
@@ -44,7 +44,7 @@ pub fn read(options: &Options) -> Vec<TileMeta> {
         bbox_unprojected
     });
 
-    let conn = Connection::open(path).unwrap();
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
 
     let mut stmt = conn.prepare("SELECT file FROM laz_index WHERE max_x >= ?1 AND min_x <= ?3 AND max_y >= ?2 AND min_y <= ?4").unwrap();
 

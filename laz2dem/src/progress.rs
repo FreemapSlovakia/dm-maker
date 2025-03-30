@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, SystemTime},
+};
 
 use maptile::tile::Tile;
 
@@ -15,6 +18,8 @@ pub struct Progress {
     supertile_zoom_offset: u8,
     pub jobs: Vec<Job>,
     states: HashMap<Tile, State>,
+    last_log: SystemTime,
+    done_count: usize,
 }
 
 impl Progress {
@@ -41,6 +46,8 @@ impl Progress {
             supertile_zoom_offset,
             jobs,
             states,
+            last_log: SystemTime::now(),
+            done_count: 0,
         }
     }
 
@@ -84,5 +91,20 @@ impl Progress {
         self.states.insert(parent, State::Waiting);
 
         self.jobs.push(Job::Overview(parent));
+
+        let t = SystemTime::now();
+
+        self.done_count += 1;
+
+        if t.duration_since(self.last_log).unwrap() > Duration::from_millis(1000) {
+            self.last_log = t;
+
+            println!(
+                "{}% {} {}",
+                (self.done_count * 10000 / self.states.len()) as f64 / 100.0,
+                self.jobs.len(),
+                self.done_count,
+            );
+        }
     }
 }

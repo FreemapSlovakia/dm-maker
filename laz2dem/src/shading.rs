@@ -1,5 +1,5 @@
 use crate::shared_types::{
-    IgorShadingParams, ObliqueShadingParams, Shading, ShadingMethod, SlopeShadingParams,
+    IgorShadingParams, ObliqueShadingParams, ObliqueSlopeShadingParams, Shading, ShadingMethod,
 };
 use image::{Rgba, RgbaImage};
 use std::f64::{
@@ -91,7 +91,7 @@ pub fn shade(
 
                     let aspect_strength = 1.0 - aspect_diff / PI;
 
-                    slope * 2.0 * aspect_strength
+                    slope / FRAC_PI_2 * 2.0 * aspect_strength
                 }
                 ShadingMethod::Oblique(ObliqueShadingParams { azimuth, altitude }) => {
                     let zenith = FRAC_PI_2 - altitude;
@@ -99,12 +99,15 @@ pub fn shade(
                     zenith.cos() * slope.cos()
                         + zenith.sin() * slope.sin() * (azimuth - FRAC_PI_2 - aspect).cos()
                 }
-                ShadingMethod::Slope(SlopeShadingParams { altitude }) => {
+                ShadingMethod::IgorSlope => slope / FRAC_PI_2,
+                ShadingMethod::ObliqueSlope(ObliqueSlopeShadingParams { altitude }) => {
                     let zenith = FRAC_PI_2 - altitude;
 
                     zenith.cos() * slope.cos() + zenith.sin() * slope.sin()
                 }
             };
+
+            let intensity = shading.contrast * (intensity - 0.5) + 0.5 + shading.brightness;
 
             let alpha = (shading.color & 0xFF) as f64 / 255.0;
 
@@ -112,13 +115,21 @@ pub fn shade(
         })
         .collect();
 
-    let alphas_sum = f64::MIN_POSITIVE + alphas.iter().sum::<f64>();
+    let alphas_sum = f64::MIN_POSITIVE
+        + alphas
+            .iter()
+            .enumerate()
+            .map(|(i, alpha)| alpha * shadings[i].weight)
+            .sum::<f64>();
 
     let compute_channel = |shift| {
         let sum: f64 = alphas
             .iter()
             .enumerate()
-            .map(|(i, alpha)| alpha * f64::from((shadings[i].color >> shift) & 0xFF_u32) / 255.0)
+            .map(|(i, alpha)| {
+                alpha * shadings[i].weight * f64::from((shadings[i].color >> shift) & 0xFF_u32)
+                    / 255.0
+            })
             .sum();
 
         let value = contrast * ((sum / alphas_sum) - 0.5) + 0.5 + brightness;

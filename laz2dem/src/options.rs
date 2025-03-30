@@ -79,6 +79,9 @@ pub struct Options {
     /// Background color when writing to JPEG as it does not support alpha
     #[clap(long, default_value = "FFFFFF")]
     pub background_color: Rgb,
+
+    #[clap(long, value_enum)]
+    pub existing_file_action: Option<ExistingFileAction>,
 }
 
 impl Options {
@@ -96,6 +99,12 @@ impl Options {
             Source::LazIndexDb,
         )
     }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum ExistingFileAction {
+    Overwrite,
+    Continue,
 }
 
 #[derive(Clone, Debug, PartialEq)]

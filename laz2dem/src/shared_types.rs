@@ -61,7 +61,8 @@ pub enum Source {
 pub enum ShadingMethod {
     Igor(IgorShadingParams),
     Oblique(ObliqueShadingParams),
-    Slope(SlopeShadingParams),
+    IgorSlope,
+    ObliqueSlope(ObliqueSlopeShadingParams),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,13 +77,16 @@ pub struct ObliqueShadingParams {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct SlopeShadingParams {
+pub struct ObliqueSlopeShadingParams {
     pub altitude: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shading {
     pub color: u32,
+    pub weight: f64,
+    pub brightness: f64,
+    pub contrast: f64,
     pub method: ShadingMethod,
 }
 
@@ -140,15 +144,22 @@ impl FromStr for Shadings {
                             }
                         }
                     }
-                    Some(&"slope") => {
+                    Some(&"oblique-slope") => {
                         if params.len() != 3 {
                             Err(())
                         } else {
                             params[2].parse::<f64>().map_or(Err(()), |altitude| {
-                                Ok(ShadingMethod::Slope(SlopeShadingParams {
+                                Ok(ShadingMethod::ObliqueSlope(ObliqueSlopeShadingParams {
                                     altitude: altitude.to_radians(),
                                 }))
                             })
+                        }
+                    }
+                    Some(&"igor-slope") => {
+                        if params.len() != 2 {
+                            Err(())
+                        } else {
+                            Ok(ShadingMethod::IgorSlope)
                         }
                     }
                     _ => Err(()),
@@ -157,7 +168,13 @@ impl FromStr for Shadings {
                 let color = u32::from_str_radix(params[1], 16);
 
                 match (color, method) {
-                    (Ok(color), Ok(method)) => Ok(Shading { color, method }),
+                    (Ok(color), Ok(method)) => Ok(Shading {
+                        color,
+                        method,
+                        brightness: 0.0,
+                        contrast: 1.0,
+                        weight: 1.0, // (i * 10 + 1) as f64 / 2.0,
+                    }),
                     _ => Err(ParseShadingError()),
                 }
             })

@@ -42,6 +42,8 @@ Options:
           Quality from 0 to 100 when writing to JPEG [default: 80]
       --background-color <BACKGROUND_COLOR>
           Background color when writing to JPEG as it does not support alpha [default: FFFFFF]
+      --existing-file-action <EXISTING_FILE_ACTION>
+          [possible values: overwrite, continue]
   -h, --help
           Print help
 ```
@@ -49,5 +51,5 @@ Options:
 Example:
 
 ```sh
-cargo run --release -- --supertile-zoom-offset 4 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox  2347219,6223449,2356002,6228760 test.mbtile --zoom-level 20 --shadings igor,203060E0,-120+igor,FFEE00D0,60+igor,000000FF,-45
+cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox 2272998,6204873,2275153,6205973 test.mbtiles --zoom-level 20 --z-factor 5 --shadings igor,5060FF60,135+igor,E0D000B0,315+igor,00000080,135+igor-slope,000000FF --background-color FFFFFF --buffer 50
 ```
