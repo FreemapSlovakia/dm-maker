@@ -101,7 +101,7 @@ impl Progress {
 
             println!(
                 "{}% {} {}",
-                (self.done_count * 10000 / self.states.len()) as f64 / 100.0,
+                (self.done_count * 10_000 / self.states.len()) as f64 / 100.0,
                 self.jobs.len(),
                 self.done_count,
             );
