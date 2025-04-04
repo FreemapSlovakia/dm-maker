@@ -53,3 +53,41 @@ Example:
 ```sh
 cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox 2272998,6204873,2275153,6205973 test.mbtiles --zoom-level 20 --z-factor 5 --shadings igor,5060FF60,135+igor,E0D000B0,315+igor,00000080,135+igor-slope,000000FF --background-color FFFFFF --buffer 50
 ```
+
+```
+A --z-factor 3 --shadings igor,203060FF,60+igor,FFEE00B2,240+igor,00000080,135+slope,00000080,0 --background-color FFFFFF
+C cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox 2272998,6204873,2275153,6205973 test.mbtiles --zoom-level 20 --z-factor 4 --shadings igor,203060FF,60+igor,FFEE00C0,240+igor,00000080,135+igor-slope,000000FF --background-color FFFFFF
+
+
+D cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox 2272998,6204873,2275153,6205973 test.mbtiles --zoom-level 20 --z-factor 4 --shadings igor-slope,000000FF --background-color FFFFFF
+
+super: cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox 2272998,6204873,2275153,6205973 test.mbtiles --zoom-level 20 --z-factor 5 --shadings igor,5060FF60,135+igor,E0D000B0,315+igor,00000080,135+igor-slope,000000FF --background-color FFFFFF
+
+yellow   green
+
+red    blue
+
+
+
+320      40
+220     140
+
+
+
+
+
+
+
+
+
+
+NICE: igor,2030A0FF,135+igor,B0A000FF,225+oblique,00000040,135,45
+
+oblik:
+
+cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox 2389783,6269680,2390951,6270781 test.mbtiles --zoom-level 20 --z-factor 10 --shadings igor,6070A0FF,135+igor,E0E0A0FF,290+igor,FF804060,45 --background-color 808080 --contrast 1.5
+
+
+plesivecka - strong default:
+cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox 2272998,6204873,2275153,6205973 test.mbtiles --zoom-level 20 --z-factor 10 --shadings igor,203060FF,60+igor,FFEE00FF,240+igor,000000FF,135 --background-color FFFFFF
+```

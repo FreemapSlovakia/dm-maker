@@ -2,10 +2,36 @@ use crate::shared_types::{
     IgorShadingParams, ObliqueShadingParams, ObliqueSlopeShadingParams, Shading, ShadingMethod,
 };
 use image::{Rgba, RgbaImage};
+use ndarray::Array2;
 use std::f64::{
     self,
     consts::{FRAC_PI_2, PI, TAU},
 };
+
+#[derive(Clone, Copy, Default)]
+pub struct SlopeAndAspect {
+    pub slope: f64,
+    pub aspect: f64,
+}
+
+pub fn compute_slopes_with_aspects(
+    elevation: &[f64],
+    z_factor: f64,
+    rows: usize,
+    cols: usize,
+) -> Array2<SlopeAndAspect> {
+    let mut values = Array2::<SlopeAndAspect>::default((cols, rows));
+
+    for y in 1..rows - 1 {
+        for x in 1..cols - 1 {
+            let (slope, aspect) = compute_slope_and_aspect(elevation, z_factor, cols, x, y);
+
+            values[[x, y]] = SlopeAndAspect { slope, aspect };
+        }
+    }
+
+    values
+}
 
 pub fn compute_hillshade<F>(
     elevation: &[f64],
@@ -17,6 +43,18 @@ pub fn compute_hillshade<F>(
 where
     F: Fn(f64, f64) -> Rgba<u8>,
 {
+    let mut slopes = Array2::<f64>::zeros((cols, rows));
+    let mut aspects = Array2::<f64>::zeros((cols, rows));
+
+    for y in 1..rows - 1 {
+        for x in 1..cols - 1 {
+            let (slope, aspect) = compute_slope_and_aspect(elevation, z_factor, cols, x, y);
+
+            slopes[[x, y]] = slope;
+            aspects[[x, y]] = aspect;
+        }
+    }
+
     let mut hillshade = RgbaImage::new(cols as u32, rows as u32);
 
     for y in 1..rows - 1 {
