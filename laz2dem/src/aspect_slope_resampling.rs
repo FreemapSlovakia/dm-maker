@@ -1,6 +1,8 @@
 use ndarray::{Array2, s};
 use std::f64::consts::{PI, TAU};
 
+use crate::aspect_slope::AspectSlope;
+
 fn sinc(x: f64) -> f64 {
     if x == 0.0 {
         1.0
@@ -41,34 +43,33 @@ fn precompute_kernel() -> [[f64; 7]; 7] {
     kernel
 }
 
-fn aspect_slope_to_vector(aspect_deg: f64, slope_deg: f64) -> [f64; 3] {
-    let az = aspect_deg.to_radians();
-    let el = slope_deg.to_radians();
-    let cos_el = el.cos();
-    [cos_el * az.cos(), cos_el * az.sin(), el.sin()]
+fn aspect_slope_to_vector(aspect_slope: AspectSlope) -> [f64; 3] {
+    let AspectSlope { aspect, slope } = aspect_slope;
+
+    let cos_el = slope.cos();
+
+    [cos_el * aspect.cos(), cos_el * aspect.sin(), slope.sin()]
 }
 
-fn vector_to_aspect_slope(v: [f64; 3]) -> (f64, f64) {
+fn vector_to_aspect_slope(v: [f64; 3]) -> AspectSlope {
     let norm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     let x = v[0] / norm;
     let y = v[1] / norm;
     let z = v[2] / norm;
     let aspect = (y.atan2(x) + TAU) % TAU;
     let slope = z.asin();
-    (aspect.to_degrees(), slope.to_degrees())
+    AspectSlope { aspect, slope }
 }
 
-pub fn downscale_lanczos3_ndarray(
-    aspect_grid: &Array2<f64>,
-    slope_grid: &Array2<f64>,
-) -> (Array2<f64>, Array2<f64>) {
+pub fn downscale_aspect_slope_grind_lanczos3(
+    aspect_slope_grid: &Array2<AspectSlope>,
+) -> Array2<AspectSlope> {
     let kernel = precompute_kernel();
-    let (in_h, in_w) = aspect_grid.dim();
-    let out_h = in_h / 2;
-    let out_w = in_w / 2;
+    let (in_h, in_w) = aspect_slope_grid.dim();
+    let out_h = in_h >> 1;
+    let out_w = in_w >> 1;
 
-    let mut out_aspect = Array2::<f64>::zeros((out_h, out_w));
-    let mut out_slope = Array2::<f64>::zeros((out_h, out_w));
+    let mut out = Array2::<AspectSlope>::default((out_h, out_w));
 
     for oy in 0..out_h {
         for ox in 0..out_w {
@@ -89,20 +90,17 @@ pub fn downscale_lanczos3_ndarray(
                         continue;
                     }
 
-                    let asp = aspect_grid[[sy as usize, sx as usize]];
-                    let slp = slope_grid[[sy as usize, sx as usize]];
-                    let vec = aspect_slope_to_vector(asp, slp);
+                    let asp = aspect_slope_grid[[sy as usize, sx as usize]];
+                    let vec = aspect_slope_to_vector(asp);
                     for k in 0..3 {
                         sum[k] += vec[k] * w;
                     }
                 }
             }
 
-            let (asp, slp) = vector_to_aspect_slope(sum);
-            out_aspect[[oy, ox]] = asp;
-            out_slope[[oy, ox]] = slp;
+            out[[oy, ox]] = vector_to_aspect_slope(sum);
         }
     }
 
-    (out_aspect, out_slope)
+    out
 }

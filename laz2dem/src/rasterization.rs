@@ -1,8 +1,10 @@
 use crate::{
+    aspect_slope::AspectSlope,
+    aspect_slope_resampling::downscale_aspect_slope_grind_lanczos3,
     options::{Format, Options},
     progress::Progress,
     schema::create_schema,
-    shading::{SlopeAndAspect, compute_hillshade, compute_slopes_with_aspects, shade},
+    shader::{compute_aspect_slopes, compute_hillshade, shade},
     shared_types::{Job, PointWithHeight, Source},
 };
 use core::f64;
@@ -98,7 +100,7 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
 
         let for_overviews = Arc::new(Mutex::new(HashMap::<Tile, RgbaImage>::new()));
 
-        let for_overviews2 = Arc::new(Mutex::new(HashMap::<Tile, Array2<SlopeAndAspect>>::new()));
+        let for_overviews2 = Arc::new(Mutex::new(HashMap::<Tile, Array2<AspectSlope>>::new()));
 
         for _ in 0..(jobs_len.min(available_parallelism().unwrap().get())) {
             let progress = Arc::clone(&progress);
@@ -153,7 +155,7 @@ struct Context<'a> {
     r#continue: bool,
     supertile_zoom_offset: u8,
     for_overviews: Arc<Mutex<HashMap<Tile, RgbaImage>>>,
-    for_overviews2: Arc<Mutex<HashMap<Tile, Array2<SlopeAndAspect>>>>,
+    for_overviews2: Arc<Mutex<HashMap<Tile, Array2<AspectSlope>>>>,
     conn: Arc<Mutex<Connection>>,
     laztile_conn: Option<Arc<Mutex<Connection>>>,
 }
@@ -162,7 +164,7 @@ fn save_tile<'a>(
     ctx: &Context<'a>,
     tile: Tile,
     img: RgbaImage,
-    slopes_and_aspects: ArrayView2<SlopeAndAspect>,
+    slopes_and_aspects: ArrayView2<AspectSlope>,
 ) {
     //     let buffer = {
     //         let (slopes, aspects): (Vec<_>, Vec<_>) = slopes_and_aspects
@@ -318,11 +320,11 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
 
             let pixels_per_meter = options.pixels_per_meter();
 
-            let width_pixels = (bbox.width() * pixels_per_meter).round() as u32;
+            let width_pixels = (bbox.width() * pixels_per_meter).round() as usize;
 
-            let height_pixels = (bbox.height() * pixels_per_meter).round() as u32;
+            let height_pixels = (bbox.height() * pixels_per_meter).round() as usize;
 
-            let mut img = Vec::new();
+            let mut elevations = Array2::<f64>::zeros((width_pixels, height_pixels));
 
             let natural_neighbor = triangulation.natural_neighbor();
 
@@ -332,30 +334,23 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                 for x in 0..width_pixels {
                     let cx = bbox.min_x + x as f64 * bbox.width() / width_pixels as f64;
 
-                    img.push(
-                        natural_neighbor
-                            .interpolate(|v| v.data().height, Point2::new(cx, cy))
-                            .unwrap_or(f64::NAN),
-                    );
+                    elevations[[x, y]] = natural_neighbor
+                        .interpolate(|v| v.data().height, Point2::new(cx, cy))
+                        .unwrap_or(f64::NAN);
                 }
             }
 
-            let slopes_and_aspects = compute_slopes_with_aspects(
-                &img,
-                options.z_factor,
-                height_pixels as usize,
-                width_pixels as usize,
-            );
+            let slopes_and_aspects =
+                compute_aspect_slopes(&elevations, options.z_factor, height_pixels, width_pixels);
 
             let img = compute_hillshade(
-                &img,
+                &elevations,
                 options.z_factor,
-                height_pixels as usize,
-                width_pixels as usize,
-                |aspect, slope| {
+                height_pixels,
+                width_pixels,
+                |aspect_slope| {
                     shade(
-                        aspect,
-                        slope,
+                        aspect_slope,
                         options.shadings.0.as_ref(),
                         options.contrast,
                         options.brightness,
@@ -409,50 +404,50 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                 u32::from(options.tile_size) << 1,
             );
 
-            // for (i, tile, img) in imgs {
-            //     let img = if ctx.r#continue && img.width() == 0 {
-            //         let data: Vec<u8> = {
-            //             let conn = ctx.conn.lock().unwrap();
+            for (i, tile, img) in imgs {
+                let img = if ctx.r#continue && img.width() == 0 {
+                    let data: Vec<u8> = {
+                        let conn = ctx.conn.lock().unwrap();
 
-            //             let mut stmt = conn.prepare(SELECT_TILE_SQL).unwrap();
+                        let mut stmt = conn.prepare(SELECT_TILE_SQL).unwrap();
 
-            //             let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
+                        let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
 
-            //             let row = rows.next().unwrap().unwrap();
+                        let row = rows.next().unwrap().unwrap();
 
-            //             row.get(0).unwrap()
-            //         };
+                        row.get(0).unwrap()
+                    };
 
-            //         load_from_memory_with_format(
-            //             data.as_slice(),
-            //             image::ImageFormat::Jpeg, // TODO also support PNG
-            //         )
-            //         .unwrap()
-            //         .to_rgba8()
-            //     } else {
-            //         img
-            //     };
+                    load_from_memory_with_format(
+                        data.as_slice(),
+                        image::ImageFormat::Jpeg, // TODO also support PNG
+                    )
+                    .unwrap()
+                    .to_rgba8()
+                } else {
+                    img
+                };
 
-            //     tile_img
-            //         .copy_from(
-            //             &img,
-            //             ((i & 1) as u32) * options.tile_size as u32,
-            //             (i >> 1) as u32 * options.tile_size as u32,
-            //         )
-            //         .unwrap();
-            // }
+                tile_img
+                    .copy_from(
+                        &img,
+                        ((i & 1) as u32) * options.tile_size as u32,
+                        (i >> 1) as u32 * options.tile_size as u32,
+                    )
+                    .unwrap();
+            }
 
-            // let img = resize(
-            //     &tile_img,
-            //     u32::from(options.tile_size),
-            //     u32::from(options.tile_size),
-            //     FilterType::Lanczos3,
-            // );
+            let img = resize(
+                &tile_img,
+                u32::from(options.tile_size),
+                u32::from(options.tile_size),
+                FilterType::Lanczos3,
+            );
 
             let mut for_overviews2 = ctx.for_overviews2.lock().unwrap();
 
-            let imgs: Vec<_> = tile;
-            l.children()
+            let aspect_slopes: Vec<_> = tile
+                .children()
                 .into_iter()
                 .enumerate()
                 .filter_map(|(i, tile)| for_overviews2.remove(&tile).map(|img| (i, tile, img)))
@@ -460,7 +455,26 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
 
             drop(for_overviews2);
 
-            save_tile(ctx, tile, img);
+            let mut apect_slope_grid = Array2::<AspectSlope>::default((
+                (options.tile_size as usize) << 1,
+                (options.tile_size as usize) << 1,
+            ));
+
+            let tile_size = options.tile_size as usize;
+
+            for (i, _, aspect_slope) in aspect_slopes {
+                let x = (i & 1) * tile_size;
+                let y = (i >> 1) * tile_size;
+
+                apect_slope_grid
+                    .slice_mut(s![x..x + tile_size, y..y + tile_size])
+                    .assign(&aspect_slope);
+            }
+
+            // TODO use buffer for better results on edge because of lanczos
+            let apect_slope_grid = downscale_aspect_slope_grind_lanczos3(&apect_slope_grid);
+
+            save_tile(ctx, tile, img, apect_slope_grid.view());
         }
     };
 

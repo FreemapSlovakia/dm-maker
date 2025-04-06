@@ -1,18 +1,20 @@
+mod aspect_slope;
+mod aspect_slope_resampling;
 mod options;
+mod points_reader;
 mod progress;
 mod rasterization;
-mod read;
 mod schema;
-mod shading;
+mod shader;
+mod shadings;
 mod shared_types;
-mod vector_resampling;
 
 use std::fs::{exists, remove_file};
 
 use clap::Parser;
 use options::{ExistingFileAction, Options};
+use points_reader::read;
 use rasterization::rasterize;
-use read::read;
 use shared_types::Job;
 
 fn main() {

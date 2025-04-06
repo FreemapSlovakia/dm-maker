@@ -1,125 +1,60 @@
-use crate::shared_types::{
-    IgorShadingParams, ObliqueShadingParams, ObliqueSlopeShadingParams, Shading, ShadingMethod,
+use crate::{
+    aspect_slope::{AspectSlope, compute_aspect_slope},
+    shadings::{
+        IgorShadingParams, ObliqueShadingParams, ObliqueSlopeShadingParams, Shading, ShadingMethod,
+    },
 };
 use image::{Rgba, RgbaImage};
 use ndarray::Array2;
-use std::f64::{
-    self,
-    consts::{FRAC_PI_2, PI, TAU},
-};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-#[derive(Clone, Copy, Default)]
-pub struct SlopeAndAspect {
-    pub slope: f64,
-    pub aspect: f64,
-}
-
-pub fn compute_slopes_with_aspects(
-    elevation: &[f64],
+pub fn compute_aspect_slopes(
+    ele_grid: &Array2<f64>,
     z_factor: f64,
     rows: usize,
     cols: usize,
-) -> Array2<SlopeAndAspect> {
-    let mut values = Array2::<SlopeAndAspect>::default((cols, rows));
+) -> Array2<AspectSlope> {
+    let mut out = Array2::<AspectSlope>::default((cols, rows));
 
     for y in 1..rows - 1 {
         for x in 1..cols - 1 {
-            let (slope, aspect) = compute_slope_and_aspect(elevation, z_factor, cols, x, y);
-
-            values[[x, y]] = SlopeAndAspect { slope, aspect };
+            out[[x, y]] = compute_aspect_slope(ele_grid, z_factor, x, y);
         }
     }
 
-    values
+    out
 }
 
 pub fn compute_hillshade<F>(
-    elevation: &[f64],
+    ele_grid: &Array2<f64>,
     z_factor: f64,
     rows: usize,
     cols: usize,
     compute_rgb: F,
 ) -> RgbaImage
 where
-    F: Fn(f64, f64) -> Rgba<u8>,
+    F: Fn(AspectSlope) -> Rgba<u8>,
 {
-    let mut slopes = Array2::<f64>::zeros((cols, rows));
-    let mut aspects = Array2::<f64>::zeros((cols, rows));
-
-    for y in 1..rows - 1 {
-        for x in 1..cols - 1 {
-            let (slope, aspect) = compute_slope_and_aspect(elevation, z_factor, cols, x, y);
-
-            slopes[[x, y]] = slope;
-            aspects[[x, y]] = aspect;
-        }
-    }
-
     let mut hillshade = RgbaImage::new(cols as u32, rows as u32);
 
     for y in 1..rows - 1 {
         for x in 1..cols - 1 {
-            let (slope, aspect) = compute_slope_and_aspect(elevation, z_factor, cols, x, y);
-
-            *hillshade.get_pixel_mut(x as u32, (rows - y) as u32) = compute_rgb(aspect, slope);
+            *hillshade.get_pixel_mut(x as u32, (rows - y) as u32) =
+                compute_rgb(compute_aspect_slope(ele_grid, z_factor, x, y));
         }
     }
 
     hillshade
 }
 
-fn compute_slope_and_aspect(
-    elevation: &[f64],
-    z_factor: f64,
-    cols: usize,
-    x: usize,
-    y: usize,
-) -> (f64, f64) {
-    let off = y * cols;
-
-    // Extract 3x3 window
-    let z1 = elevation[off - cols + x - 1];
-    let z2 = elevation[off - cols + x];
-    let z3 = elevation[off - cols + x + 1];
-    let z4 = elevation[off + x - 1];
-    let z6 = elevation[off + x + 1];
-    let z7 = elevation[off + cols + x - 1];
-    let z8 = elevation[off + cols + x];
-    let z9 = elevation[off + cols + x + 1];
-
-    // Compute raw derivatives (Horn method)
-    let dz_dx = (-z1 + z3 - 2.0 * z4 + 2.0 * z6 - z7 + z9) / 8.0;
-    let dz_dy = (-z1 - 2.0 * z2 - z3 + z7 + 2.0 * z8 + z9) / 8.0;
-
-    // Apply z-factor
-    let dz_dx = dz_dx * z_factor;
-    let dz_dy = dz_dy * z_factor;
-
-    // Compute slope
-    let mut slope = dz_dx.hypot(dz_dy).atan();
-
-    // Compute aspect
-    let mut aspect = dz_dy.atan2(-dz_dx);
-
-    if aspect < 0.0 {
-        aspect += TAU;
-    }
-
-    if aspect.is_nan() || slope.is_nan() {
-        slope = 0.0;
-        aspect = 0.0;
-    }
-
-    (slope, aspect)
-}
-
 pub fn shade(
-    aspect: f64,
-    slope: f64,
+    aspect_slope: AspectSlope,
     shadings: &[Shading],
     contrast: f64,
     brightness: f64,
 ) -> Rgba<u8> {
+    let AspectSlope { aspect, slope } = aspect_slope;
+
     let alphas: Vec<_> = shadings
         .iter()
         .map(|shading| {

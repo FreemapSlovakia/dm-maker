@@ -1,4 +1,4 @@
-use crate::shared_types::{Shadings, Source};
+use crate::{shadings::Shadings, shared_types::Source};
 use clap::{ArgGroup, Parser, ValueEnum};
 use maptile::{bbox::BBox, constants::WEB_MERCATOR_EXTENT};
 use std::{
