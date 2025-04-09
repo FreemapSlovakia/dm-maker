@@ -18,7 +18,7 @@ use walkdir::WalkDir;
 
 #[derive(Parser, Debug, PartialEq)]
 struct Options {
-    #[clap(long, default_value_t = true)]
+    #[clap(long, default_value_t = false)]
     r#continue: bool,
 
     /// Directory with *.laz files
@@ -153,7 +153,15 @@ fn main() {
                     for point in reader.points() {
                         let point = point.unwrap();
 
-                        if point.classification != Classification::Ground {
+                        if !matches!(
+                            point.classification,
+                            Classification::Ground
+                                | Classification::BridgeDeck
+                                | Classification::Water
+                                | Classification::Building
+                                | Classification::Rail
+                                | Classification::RoadSurface
+                        ) {
                             continue;
                         }
 
@@ -214,6 +222,7 @@ fn main() {
                                     x,
                                     y,
                                     z: point.z,
+                                    classification: point.classification,
                                     ..Default::default()
                                 })
                                 .unwrap();
