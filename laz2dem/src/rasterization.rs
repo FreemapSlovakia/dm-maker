@@ -1,16 +1,15 @@
 use crate::{
     aspect_slope::AspectSlope,
-    aspect_slope_resampling::downscale_aspect_slope_grind_lanczos3,
+    elevation_type::Gray64FImage,
     options::{Format, Options},
     progress::Progress,
     schema::create_schema,
-    shader::{compute_aspect_slopes, compute_hillshade, shade},
+    shader::{compute_hillshade, shade},
     shared_types::{Job, PointWithHeight, Source},
 };
 use core::f64;
-use half::f16;
 use image::{
-    GenericImage, Pixel, Rgb, RgbImage, RgbaImage,
+    GenericImage, Luma, Pixel, Rgb, RgbImage, RgbaImage,
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
     imageops::{FilterType, crop_imm, resize},
     load_from_memory_with_format,
@@ -100,7 +99,7 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
 
         let for_overviews = Arc::new(Mutex::new(HashMap::<Tile, RgbaImage>::new()));
 
-        let for_overviews2 = Arc::new(Mutex::new(HashMap::<Tile, Array2<AspectSlope>>::new()));
+        let for_overviews2 = Arc::new(Mutex::new(HashMap::<Tile, Gray64FImage>::new()));
 
         for _ in 0..(jobs_len.min(available_parallelism().unwrap().get())) {
             let progress = Arc::clone(&progress);
@@ -155,17 +154,12 @@ struct Context<'a> {
     r#continue: bool,
     supertile_zoom_offset: u8,
     for_overviews: Arc<Mutex<HashMap<Tile, RgbaImage>>>,
-    for_overviews2: Arc<Mutex<HashMap<Tile, Array2<AspectSlope>>>>,
+    for_overviews2: Arc<Mutex<HashMap<Tile, Gray64FImage>>>,
     conn: Arc<Mutex<Connection>>,
     laztile_conn: Option<Arc<Mutex<Connection>>>,
 }
 
-fn save_tile<'a>(
-    ctx: &Context<'a>,
-    tile: Tile,
-    img: RgbaImage,
-    slopes_and_aspects: ArrayView2<AspectSlope>,
-) {
+fn save_tile<'a>(ctx: &Context<'a>, tile: Tile, img: RgbaImage, slopes_and_aspects: Gray64FImage) {
     //     let buffer = {
     //         let (slopes, aspects): (Vec<_>, Vec<_>) = slopes_and_aspects
     //             .iter()
@@ -320,11 +314,11 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
 
             let pixels_per_meter = options.pixels_per_meter();
 
-            let width_pixels = (bbox.width() * pixels_per_meter).round() as usize;
+            let width_pixels = (bbox.width() * pixels_per_meter).round() as u32;
 
-            let height_pixels = (bbox.height() * pixels_per_meter).round() as usize;
+            let height_pixels = (bbox.height() * pixels_per_meter).round() as u32;
 
-            let mut elevations = Array2::<f64>::zeros((width_pixels, height_pixels));
+            let mut elevations: Gray64FImage;
 
             let natural_neighbor = triangulation.natural_neighbor();
 
@@ -334,14 +328,11 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                 for x in 0..width_pixels {
                     let cx = bbox.min_x + x as f64 * bbox.width() / width_pixels as f64;
 
-                    elevations[[x, y]] = natural_neighbor
+                    *elevations.get_pixel_mut(x, y) = Luma([natural_neighbor
                         .interpolate(|v| v.data().height, Point2::new(cx, cy))
-                        .unwrap_or(f64::NAN);
+                        .unwrap_or(f64::NAN)]);
                 }
             }
-
-            let slopes_and_aspects =
-                compute_aspect_slopes(&elevations, options.z_factor, height_pixels, width_pixels);
 
             let img = compute_hillshade(
                 &elevations,
@@ -371,10 +362,7 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
 
                 let y = buffer_px + (sector as u32 >> ctx.supertile_zoom_offset) * tile_size;
 
-                let slice: ArrayView2<_> = slopes_and_aspects.slice(s![
-                    x as usize..(x + tile_size) as usize,
-                    y as usize..(y + tile_size) as usize
-                ]);
+                let slice = elevations.sub_image(x, y, tile_size, tile_size).to_image();
 
                 let img = crop_imm(&img, x, y, tile_size, tile_size).to_image();
 

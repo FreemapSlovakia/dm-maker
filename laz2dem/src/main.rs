@@ -1,5 +1,5 @@
 mod aspect_slope;
-mod aspect_slope_resampling;
+mod elevation_type;
 mod options;
 mod points_reader;
 mod progress;

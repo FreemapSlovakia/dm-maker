@@ -81,9 +81,9 @@ pub fn read(options: &Options) -> Vec<TileMeta> {
             for point in reader.points() {
                 let point = point.unwrap();
 
-                if point.classification != Classification::Ground {
-                    continue;
-                }
+                // if point.classification != Classification::Ground {
+                //     continue;
+                // }
 
                 if let Some(bbox_unprojected) = bbox_unprojected {
                     if !bbox_unprojected.contains(point.x, point.y) {

@@ -1,46 +1,29 @@
 use crate::{
     aspect_slope::{AspectSlope, compute_aspect_slope},
+    elevation_type::Gray64FImage,
     shadings::{
         IgorShadingParams, ObliqueShadingParams, ObliqueSlopeShadingParams, Shading, ShadingMethod,
     },
 };
 use image::{Rgba, RgbaImage};
-use ndarray::Array2;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-pub fn compute_aspect_slopes(
-    ele_grid: &Array2<f64>,
-    z_factor: f64,
-    rows: usize,
-    cols: usize,
-) -> Array2<AspectSlope> {
-    let mut out = Array2::<AspectSlope>::default((cols, rows));
-
-    for y in 1..rows - 1 {
-        for x in 1..cols - 1 {
-            out[[x, y]] = compute_aspect_slope(ele_grid, z_factor, x, y);
-        }
-    }
-
-    out
-}
-
 pub fn compute_hillshade<F>(
-    ele_grid: &Array2<f64>,
+    elevation_image: &Gray64FImage,
     z_factor: f64,
-    rows: usize,
-    cols: usize,
+    rows: u32,
+    cols: u32,
     compute_rgb: F,
 ) -> RgbaImage
 where
     F: Fn(AspectSlope) -> Rgba<u8>,
 {
-    let mut hillshade = RgbaImage::new(cols as u32, rows as u32);
+    let mut hillshade = RgbaImage::new(cols, rows);
 
     for y in 1..rows - 1 {
         for x in 1..cols - 1 {
-            *hillshade.get_pixel_mut(x as u32, (rows - y) as u32) =
-                compute_rgb(compute_aspect_slope(ele_grid, z_factor, x, y));
+            *hillshade.get_pixel_mut(x, rows - y) =
+                compute_rgb(compute_aspect_slope(elevation_image, z_factor, x, y));
         }
     }
 
