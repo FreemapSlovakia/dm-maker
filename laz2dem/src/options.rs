@@ -1,4 +1,4 @@
-use crate::{shadings::Shadings, shared_types::Source};
+use crate::shared_types::Source;
 use clap::{ArgGroup, Parser, ValueEnum};
 use maptile::{bbox::BBox, constants::WEB_MERCATOR_EXTENT};
 use std::{
@@ -39,27 +39,6 @@ pub struct Options {
     #[clap(long, default_value_t = 16)]
     pub unit_zoom_level: u8,
 
-    /// Shadings; `+` separated componets of shading. Shading component is <method>,method_param1[,method_param2...].
-    /// ‎
-    /// Methods:
-    /// - `oblique` - params: azimuth in degrees, alitutde in degrees
-    /// - `igor` - params: azimuth in degrees
-    /// - `slope` - params: alitutde in degrees
-    #[clap(long, verbatim_doc_comment)]
-    pub shadings: Shadings,
-
-    /// Increase (> 1.0) or decrease (< 1.0) contrast of the shading. Use value higher than 0.0.
-    #[clap(long, default_value_t = 1.0)]
-    pub contrast: f64,
-
-    /// Increase (> 0.0) or decrease (< 0.0) brightness of the shading. Use value between -1.0 and 1.0.
-    #[clap(long, default_value_t = 0.0)]
-    pub brightness: f64,
-
-    /// Z-factor
-    #[clap(long, default_value_t = 1.0)]
-    pub z_factor: f64,
-
     /// Tile size
     #[clap(long, default_value_t = 256)]
     pub tile_size: u16,
@@ -67,18 +46,6 @@ pub struct Options {
     /// Buffer size in pixels to prevent artifacts at tieledges
     #[clap(long, default_value_t = 40)]
     pub buffer: u32,
-
-    /// Tile image format. For alpha (transparency) support use `png`.
-    #[clap(long, value_enum, default_value_t = Format::JPEG)]
-    pub format: Format,
-
-    /// Quality from 0 to 100 when writing to JPEG
-    #[clap(long, default_value_t = 80)]
-    pub jpeg_quality: u8,
-
-    /// Background color when writing to JPEG as it does not support alpha
-    #[clap(long, default_value = "FFFFFF")]
-    pub background_color: Rgb,
 
     #[clap(long, value_enum)]
     pub existing_file_action: Option<ExistingFileAction>,
