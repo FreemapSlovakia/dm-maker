@@ -1,5 +1,5 @@
 use crate::{
-    lanczos::resize_520_to_260_lanczos3,
+    lanczos::resize_lanczos3,
     options::Options,
     progress::Progress,
     schema::create_schema,
@@ -18,6 +18,8 @@ use std::{
     sync::{Arc, Mutex},
     thread::{self, available_parallelism},
 };
+
+const BUFFER_PX: usize = 2;
 
 const SELECT_TILE_EXISTS_SQL: &str =
     "SELECT 1 FROM tiles WHERE zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3";
@@ -272,8 +274,8 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
 
                 let slice = elevations
                     .slice(s![
-                        (y - 2)..(y + tile_size + 2),
-                        (x - 2)..(x + tile_size + 2)
+                        (y - BUFFER_PX)..(y + tile_size + BUFFER_PX),
+                        (x - BUFFER_PX)..(x + tile_size + BUFFER_PX)
                     ])
                     .to_owned();
 
@@ -283,7 +285,7 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
         Job::Overview(tile) => {
             let for_overviews = ctx.for_overviews.lock().unwrap();
 
-            let aspect_slopes: Vec<_> = tile
+            let children: Vec<_> = tile
                 .children_buffered(1)
                 .enumerate()
                 .filter_map(|(i, tile)| for_overviews.get(&tile).map(|img| (i, tile, img.clone())))
@@ -296,37 +298,37 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
             let tile_size = options.tile_size as usize;
 
             let mut img = Array2::<f64>::zeros([
-                (tile_size << 1) as usize + 8,
-                (tile_size << 1) as usize + 8,
+                (tile_size + BUFFER_PX * 2) * 2,
+                (tile_size + BUFFER_PX * 2) * 2,
             ]);
 
-            struct Window {
+            struct Resize {
                 src: usize,
                 dest: usize,
                 size: usize,
             }
 
-            for (i, _, sub) in aspect_slopes {
+            for (i, _, sub) in children {
                 let adjust = |c: usize| match c {
-                    0 => Window {
+                    0 => Resize {
                         dest: 0,
-                        src: 2 + tile_size - 4,
-                        size: 2,
+                        src: BUFFER_PX + tile_size - 2 * BUFFER_PX,
+                        size: 2 * BUFFER_PX,
                     },
-                    1 => Window {
-                        dest: 2,
-                        src: 0,
-                        size: 2 + tile_size,
+                    1 => Resize {
+                        dest: 2 * BUFFER_PX,
+                        src: BUFFER_PX,
+                        size: tile_size,
                     },
-                    2 => Window {
-                        dest: 4 + tile_size,
-                        src: 2,
-                        size: tile_size + 2,
+                    2 => Resize {
+                        dest: 2 * BUFFER_PX + tile_size,
+                        src: BUFFER_PX,
+                        size: tile_size,
                     },
-                    3 => Window {
-                        dest: 4 + (tile_size << 1) + 2,
-                        src: 4,
-                        size: 2,
+                    3 => Resize {
+                        dest: 2 * BUFFER_PX + 2 * tile_size,
+                        src: BUFFER_PX,
+                        size: 2 * BUFFER_PX,
                     },
                     _ => panic!("out of range"),
                 };
@@ -334,30 +336,30 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                 let y = adjust(i & 3);
                 let x = adjust(i >> 2);
 
-                // if tile
-                //     == (Tile {
-                //         zoom: 19,
-                //         x: 291828,
-                //         y: 180340,
-                //     })
-                // {
-                //     println!("{i} | x: {x:?}, y: {y:?} | {:?}", sub.get_pixel(128, 128));
-                // }
-
                 img.slice_mut(s![y.dest..(y.dest + y.size), x.dest..(x.dest + x.size)])
                     .assign(&sub.slice(s![y.src..y.src + y.size, x.src..x.src + x.size]));
             }
 
-            let img = resize_520_to_260_lanczos3(&img);
+            let img = resize_lanczos3(&img, (tile_size + BUFFER_PX * 2, tile_size + BUFFER_PX * 2));
 
             if tile
                 == (Tile {
-                    zoom: 19,
-                    x: 291828,
-                    y: 180340,
+                    zoom: 18,
+                    x: 145915,
+                    y: 90174,
                 })
             {
-                println!("{tile:?} ... {:?}", img[[100, 100]]);
+                println!(
+                    "{} {} {} {} {}",
+                    tile,
+                    img[[0, 0]],
+                    img[[0, BUFFER_PX + tile_size + BUFFER_PX - 1]],
+                    img[[BUFFER_PX + tile_size + BUFFER_PX - 1, 0]],
+                    img[[
+                        BUFFER_PX + tile_size + BUFFER_PX - 1,
+                        BUFFER_PX + tile_size + BUFFER_PX - 1
+                    ]]
+                );
             }
 
             save_tile(ctx, tile, img);

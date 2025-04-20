@@ -1,11 +1,11 @@
-// Optimized Lanczos3 resizing from 520x520 to 260x260 for Array2<f64> with statically cached kernel
+// General Lanczos3 resizing for Array2<f64> with runtime input/output size and cached kernels
 use ndarray::{Array2, ArrayView2, ArrayViewMut2, Axis};
+use std::collections::HashMap;
 use std::f64::consts::PI;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 
 const LANCZOS_RADIUS: usize = 3;
-const INPUT_SIZE: usize = 520;
-const OUTPUT_SIZE: usize = 260;
 
 fn sinc(x: f64) -> f64 {
     if x == 0.0 {
@@ -51,13 +51,24 @@ fn generate_kernel(src_len: usize, dst_len: usize) -> Vec<Vec<(isize, f64)>> {
     kernel
 }
 
-static KERNEL_X: OnceLock<Vec<Vec<(isize, f64)>>> = OnceLock::new();
-static KERNEL_Y: OnceLock<Vec<Vec<(isize, f64)>>> = OnceLock::new();
+static KERNEL_CACHE: OnceLock<Mutex<HashMap<(usize, usize), Vec<Vec<(isize, f64)>>>>> =
+    OnceLock::new();
 
-fn resize_1d_const_kernel(
+fn get_or_compute_kernel(src: usize, dst: usize) -> Vec<Vec<(isize, f64)>> {
+    let cache = KERNEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut lock = cache.lock().unwrap();
+    if let Some(k) = lock.get(&(src, dst)) {
+        return k.clone();
+    }
+    let computed = generate_kernel(src, dst);
+    lock.insert((src, dst), computed.clone());
+    computed
+}
+
+fn resize_1d(
     src: ArrayView2<f64>,
     mut dst: ArrayViewMut2<f64>,
-    kernel: &Vec<Vec<(isize, f64)>>,
+    kernel: &[Vec<(isize, f64)>],
     axis: Axis,
 ) {
     let out_len = dst.len_of(axis);
@@ -86,17 +97,18 @@ fn resize_1d_const_kernel(
     }
 }
 
-pub fn resize_520_to_260_lanczos3(input: &Array2<f64>) -> Array2<f64> {
-    let kernel_x = KERNEL_X.get_or_init(|| generate_kernel(INPUT_SIZE, OUTPUT_SIZE));
-    let kernel_y = KERNEL_Y.get_or_init(|| generate_kernel(INPUT_SIZE, OUTPUT_SIZE));
+pub fn resize_lanczos3(input: &Array2<f64>, output_size: (usize, usize)) -> Array2<f64> {
+    let (h_in, w_in) = input.dim();
+    let (h_out, w_out) = output_size;
 
-    let mut tmp = Array2::<f64>::zeros((INPUT_SIZE, OUTPUT_SIZE));
+    let kernel_x = get_or_compute_kernel(w_in, w_out);
+    let kernel_y = get_or_compute_kernel(h_in, h_out);
 
-    resize_1d_const_kernel(input.view(), tmp.view_mut(), kernel_x, Axis(1));
+    let mut tmp = Array2::<f64>::zeros((h_in, w_out));
+    resize_1d(input.view(), tmp.view_mut(), &kernel_x, Axis(1));
 
-    let mut output = Array2::<f64>::zeros((OUTPUT_SIZE, OUTPUT_SIZE));
-
-    resize_1d_const_kernel(tmp.view(), output.view_mut(), kernel_y, Axis(0));
+    let mut output = Array2::<f64>::zeros((h_out, w_out));
+    resize_1d(tmp.view(), output.view_mut(), &kernel_y, Axis(0));
 
     output
 }
