@@ -12,6 +12,7 @@ fn sinc(x: f64) -> f64 {
         1.0
     } else {
         let pix = PI * x;
+
         (pix.sin()) / pix
     }
 }
@@ -26,22 +27,29 @@ fn lanczos3(x: f64) -> f64 {
 
 fn generate_kernel(src_len: usize, dst_len: usize) -> Vec<Vec<(isize, f64)>> {
     let scale = dst_len as f64 / src_len as f64;
+
     let mut kernel = Vec::with_capacity(dst_len);
 
     for i in 0..dst_len {
         let center = (i as f64 + 0.5) / scale - 0.5;
+
         let left = center.floor() as isize - LANCZOS_RADIUS as isize + 1;
+
         let mut weights = Vec::with_capacity(2 * LANCZOS_RADIUS);
+
         let mut sum = 0.0;
 
         for j in 0..2 * LANCZOS_RADIUS {
             let idx = left + j as isize;
+
             let w = lanczos3(center - idx as f64);
+
             weights.push((idx, w));
+
             sum += w;
         }
 
-        for (_idx, w) in weights.iter_mut() {
+        for (_idx, w) in &mut weights {
             *w /= sum;
         }
 
@@ -56,12 +64,17 @@ static KERNEL_CACHE: OnceLock<Mutex<HashMap<(usize, usize), Vec<Vec<(isize, f64)
 
 fn get_or_compute_kernel(src: usize, dst: usize) -> Vec<Vec<(isize, f64)>> {
     let cache = KERNEL_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
     let mut lock = cache.lock().unwrap();
+
     if let Some(k) = lock.get(&(src, dst)) {
         return k.clone();
     }
+
     let computed = generate_kernel(src, dst);
+
     lock.insert((src, dst), computed.clone());
+
     computed
 }
 
@@ -72,12 +85,15 @@ fn resize_1d(
     axis: Axis,
 ) {
     let out_len = dst.len_of(axis);
+
     let other_axis = axis.index() ^ 1;
+
     let in_len = src.len_of(axis);
 
     for out_i in 0..out_len {
         for j in 0..src.len_of(Axis(other_axis)) {
             let mut val = 0.0;
+
             for &(src_i, weight) in &kernel[out_i] {
                 if src_i >= 0 && (src_i as usize) < in_len {
                     let idx = if axis == Axis(0) {
@@ -85,14 +101,18 @@ fn resize_1d(
                     } else {
                         [j, src_i as usize]
                     };
+
                     val += weight * src[idx];
                 }
             }
-            if axis == Axis(0) {
-                dst[[out_i, j]] = val;
+
+            let idx = if axis == Axis(0) {
+                [out_i, j]
             } else {
-                dst[[j, out_i]] = val;
-            }
+                [j, out_i]
+            };
+
+            dst[idx] = val;
         }
     }
 }

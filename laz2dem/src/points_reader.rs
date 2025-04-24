@@ -4,12 +4,12 @@ use crate::{
 };
 use core::f64;
 use las::{Reader, point::Classification};
-use maptile::{bbox::BBox, utils::bbox_covered_tiles};
 use proj::Proj;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use rusqlite::{Connection, OpenFlags};
 use spade::Point2;
 use std::sync::Mutex;
+use tilemath::{bbox::BBox, utils::bbox_covered_tiles};
 
 pub fn read(options: &Options) -> Vec<TileMeta> {
     let buffer_m = options.buffer as f64 / options.pixels_per_meter();
@@ -19,7 +19,7 @@ pub fn read(options: &Options) -> Vec<TileMeta> {
             tile,
             bbox: tile
                 .bounds(options.tile_size << (options.zoom_level - options.unit_zoom_level))
-                .to_extended(buffer_m),
+                .to_buffered(buffer_m),
             points: Mutex::new(Vec::<PointWithHeight>::new()),
         })
         .collect();
@@ -81,9 +81,9 @@ pub fn read(options: &Options) -> Vec<TileMeta> {
             for point in reader.points() {
                 let point = point.unwrap();
 
-                // if point.classification != Classification::Ground {
-                //     continue;
-                // }
+                if point.classification == Classification::Water {
+                    continue;
+                }
 
                 if let Some(bbox_unprojected) = bbox_unprojected {
                     if !bbox_unprojected.contains(point.x, point.y) {

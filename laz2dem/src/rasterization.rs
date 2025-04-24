@@ -6,18 +6,20 @@ use crate::{
     shared_types::{Job, PointWithHeight, Source},
 };
 use core::f64;
+use itertools::{Either, Itertools};
 use las::Reader;
-use maptile::tile::Tile;
+use lru::LruCache;
 use ndarray::{Array2, s};
 use proj::Proj;
 use rusqlite::{Connection, Error, ErrorCode, OpenFlags};
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use std::{
-    collections::HashMap,
     io::Cursor,
+    num::NonZero,
     sync::{Arc, Mutex},
     thread::{self, available_parallelism},
 };
+use tilemath::tile::Tile;
 
 const BUFFER_PX: usize = 2;
 
@@ -27,6 +29,12 @@ const SELECT_TILE_EXISTS_SQL: &str =
 const INSERT_TILE_SQL: &str = "INSERT INTO tiles VALUES (?1, ?2, ?3, ?4)";
 
 const SELECT_LAZTILE_SQL: &str = "SELECT data FROM tiles WHERE x = ?1 AND y = ?2";
+
+struct Resize {
+    src: usize,
+    dest: usize,
+    size: usize,
+}
 
 pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
     let output = &options.output;
@@ -81,7 +89,9 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
     thread::scope(|scope| {
         let jobs_len = progress.lock().unwrap().jobs.len();
 
-        let for_overviews = Arc::new(Mutex::new(HashMap::<Tile, Array2<f64>>::new()));
+        let for_overviews = Arc::new(Mutex::new(LruCache::<Tile, Array2<f64>>::new(
+            NonZero::new(4096).unwrap(), // TODO configurable
+        )));
 
         for _ in 0..(jobs_len.min(available_parallelism().unwrap().get())) {
             let progress = Arc::clone(&progress);
@@ -116,21 +126,34 @@ struct Context<'a> {
     options: &'a Options,
     r#continue: bool,
     supertile_zoom_offset: u8,
-    for_overviews: Arc<Mutex<HashMap<Tile, Array2<f64>>>>,
+    for_overviews: Arc<Mutex<LruCache<Tile, Array2<f64>>>>,
     conn: Arc<Mutex<Connection>>,
     laztile_conn: Option<Arc<Mutex<Connection>>>,
 }
 
 fn save_tile<'a>(ctx: &Context<'a>, tile: Tile, dem: Array2<f64>) {
+    // let r = lerc::encode(
+    //     dem.as_slice().unwrap(),
+    //     None,
+    //     dem.ncols(),
+    //     dem.nrows(),
+    //     1,
+    //     1,
+    //     0,
+    //     (0.0005 * (1 << (20 - tile.zoom)) as f64).max(0.001),
+    // )
+    // .unwrap();
+
     let r: Vec<_> = dem
-        .clone()
+        .as_slice()
+        .unwrap()
         .into_iter()
-        .flat_map(|value| (value as f32).to_le_bytes())
+        .flat_map(|v| (*v as f32).to_le_bytes().into_iter())
         .collect();
 
     let buffer = zstd::encode_all(Cursor::new(r), 0).unwrap();
 
-    ctx.for_overviews.lock().unwrap().insert(tile, dem);
+    ctx.for_overviews.lock().unwrap().put(tile, dem);
 
     let res = ctx.conn.lock().unwrap().execute(
         INSERT_TILE_SQL,
@@ -160,52 +183,55 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
 
     // println!("Processing {:?}", job);
 
-    // if ctx.r#continue {
-    //     let (tile, tiles) = match job {
-    //         Job::Rasterize(ref tile_meta) => (
-    //             tile_meta.tile,
-    //             tile_meta.tile.descendants(ctx.supertile_zoom_offset),
-    //         ),
-    //         Job::Overview(tile) => (tile, vec![tile]),
-    //     };
+    if ctx.r#continue {
+        let (tile, tiles) = match job {
+            Job::Rasterize(ref tile_meta) => (
+                tile_meta.tile,
+                tile_meta.tile.descendants(ctx.supertile_zoom_offset),
+            ),
+            Job::Overview(tile) => (tile, vec![tile]),
+        };
 
-    //     let conn = ctx.conn.lock().unwrap();
+        let conn = ctx.conn.lock().unwrap();
 
-    //     let mut stmt = conn.prepare(SELECT_TILE_EXISTS_SQL).unwrap();
+        let mut stmt = conn.prepare(SELECT_TILE_EXISTS_SQL).unwrap();
 
-    //     let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
+        let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
 
-    //     if rows.next().unwrap().is_some() {
-    //         for tile in tiles {
-    //             ctx.for_overviews
-    //                 .lock()
-    //                 .unwrap()
-    //                 .insert(tile, Array2::<f64>::zeros([0, 0])); // TODO
+        if rows.next().unwrap().is_some() {
+            for tile in tiles {
+                progress.lock().unwrap().done(tile);
+            }
 
-    //             progress.lock().unwrap().done(tile);
-    //         }
-
-    //         return true;
-    //     }
-    // }
+            return true;
+        }
+    }
 
     match job {
         Job::Rasterize(tile_meta) => {
             let points = ctx.laztile_conn.as_ref().map_or_else(
                 || tile_meta.points.into_inner().unwrap(),
                 |laztile_conn| {
-                    let laztile_conn = laztile_conn.lock().unwrap();
+                    let chunks = {
+                        let laztile_conn = laztile_conn.lock().unwrap();
 
-                    let mut stmt = laztile_conn.prepare(SELECT_LAZTILE_SQL).unwrap();
+                        let mut stmt = laztile_conn.prepare(SELECT_LAZTILE_SQL).unwrap();
 
-                    let mut rows = stmt.query((tile_meta.tile.x, tile_meta.tile.y)).unwrap();
+                        let mut rows = stmt.query((tile_meta.tile.x, tile_meta.tile.y)).unwrap();
+
+                        let mut chunks = Vec::new();
+
+                        while let Some(row) = rows.next().unwrap() {
+                            chunks.push(row.get::<_, Vec<u8>>(0).unwrap());
+                        }
+
+                        chunks
+                    };
 
                     let mut points = Vec::new();
 
-                    while let Some(row) = rows.next().unwrap() {
-                        let data: Vec<u8> = row.get(0).unwrap();
-
-                        let mut reader = Reader::new(Cursor::new(data)).unwrap();
+                    for chunk in chunks {
+                        let mut reader = Reader::new(Cursor::new(chunk)).unwrap();
 
                         reader.read_all_points_into(&mut points).unwrap();
                     }
@@ -283,32 +309,111 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
             }
         }
         Job::Overview(tile) => {
-            let for_overviews = ctx.for_overviews.lock().unwrap();
+            let mut for_overviews = ctx.for_overviews.lock().unwrap();
 
-            let children: Vec<_> = tile
-                .children_buffered(1)
+            let children_buffered = tile.children_buffered(1);
+
+            let (children_with_data, children_without_data): (Vec<_>, Vec<_>) = children_buffered
                 .enumerate()
-                .filter_map(|(i, tile)| for_overviews.get(&tile).map(|img| (i, tile, img.clone())))
-                .collect();
-
-            // TODO missing deleting from `for_overviews`
+                .map(|(sector, tile)| {
+                    for_overviews.get(&tile).map_or_else(
+                        || Either::Right((sector, tile)),
+                        |dem| Either::Left((sector, dem.clone())),
+                    )
+                })
+                .partition_map(|e| e);
 
             drop(for_overviews);
 
+            let children = if children_without_data.is_empty() {
+                children_with_data
+            } else {
+                let (sql, flat_params): (Vec<_>, Vec<_>) = children_without_data
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_sector, tile))| {
+                        let j = i * 3;
+                        (
+                            format!(
+                                "(zoom_level = ?{} AND tile_column = ?{} AND tile_row = ?{})",
+                                j + 1,
+                                j + 2,
+                                j + 3
+                            ),
+                            vec![u32::from(tile.zoom), tile.x, tile.reversed_y()],
+                        )
+                    })
+                    .unzip();
+
+                let sql = format!(
+                    "SELECT tile_data, zoom_level, tile_column, tile_row FROM tiles WHERE {}",
+                    sql.join(" OR ")
+                );
+
+                let flat_params: Vec<u32> = flat_params.into_iter().flatten().collect();
+
+                let flat_refs: Vec<&dyn rusqlite::ToSql> = flat_params
+                    .iter()
+                    .map(|v| v as &dyn rusqlite::ToSql)
+                    .collect();
+
+                {
+                    let conn = ctx.conn.lock().unwrap();
+
+                    let mut stmt = conn.prepare(&sql).unwrap();
+
+                    stmt.query_map(&flat_refs[..], |row| {
+                        let zoom = row.get(1)?;
+
+                        Ok((
+                            Tile {
+                                zoom,
+                                x: row.get(2)?,
+                                y: (1u32 << zoom) - 1 - row.get::<_, u32>(3)?,
+                            },
+                            row.get::<_, Vec<u8>>(0)?,
+                        ))
+                    })
+                    .unwrap()
+                    .map(|row| row.unwrap())
+                    .collect::<Vec<_>>()
+                }
+                .into_iter()
+                .filter_map(|row| {
+                    children_without_data
+                        .iter()
+                        .find(|(_, tile)| tile == &row.0)
+                        .map(|(sector, _)| {
+                            let buf = zstd::decode_all(Cursor::new(row.1)).unwrap();
+
+                            assert_eq!(buf.len() % 4, 0, "buffer length must be multiple of 4");
+
+                            let floats: Vec<f64> = buf
+                                .chunks_exact(4)
+                                .map(|chunk| {
+                                    f64::from(f32::from_le_bytes(chunk.try_into().unwrap()))
+                                })
+                                .collect();
+
+                            let len = floats.len();
+                            let dim = (len as f64).sqrt() as usize;
+                            assert_eq!(dim * dim, len, "data does not form a square matrix");
+
+                            (*sector, Array2::from_shape_vec((dim, dim), floats).unwrap())
+                        })
+                })
+                .chain(children_with_data)
+                .collect::<Vec<_>>()
+            };
+
             let tile_size = options.tile_size as usize;
 
-            let mut img = Array2::<f64>::zeros([
+            let mut dem = Array2::<f64>::zeros([
                 (tile_size + BUFFER_PX * 2) * 2,
                 (tile_size + BUFFER_PX * 2) * 2,
             ]);
 
-            struct Resize {
-                src: usize,
-                dest: usize,
-                size: usize,
-            }
-
-            for (i, _, sub) in children {
+            for (sector, child_dem) in children {
                 let adjust = |c: usize| match c {
                     0 => Resize {
                         dest: 0,
@@ -333,36 +438,16 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                     _ => panic!("out of range"),
                 };
 
-                let y = adjust(i & 3);
-                let x = adjust(i >> 2);
+                let y = adjust(sector & 3);
+                let x = adjust(sector >> 2);
 
-                img.slice_mut(s![y.dest..(y.dest + y.size), x.dest..(x.dest + x.size)])
-                    .assign(&sub.slice(s![y.src..y.src + y.size, x.src..x.src + x.size]));
+                dem.slice_mut(s![y.dest..(y.dest + y.size), x.dest..(x.dest + x.size)])
+                    .assign(&child_dem.slice(s![y.src..y.src + y.size, x.src..x.src + x.size]));
             }
 
-            let img = resize_lanczos3(&img, (tile_size + BUFFER_PX * 2, tile_size + BUFFER_PX * 2));
+            let dem = resize_lanczos3(&dem, (tile_size + BUFFER_PX * 2, tile_size + BUFFER_PX * 2));
 
-            if tile
-                == (Tile {
-                    zoom: 18,
-                    x: 145915,
-                    y: 90174,
-                })
-            {
-                println!(
-                    "{} {} {} {} {}",
-                    tile,
-                    img[[0, 0]],
-                    img[[0, BUFFER_PX + tile_size + BUFFER_PX - 1]],
-                    img[[BUFFER_PX + tile_size + BUFFER_PX - 1, 0]],
-                    img[[
-                        BUFFER_PX + tile_size + BUFFER_PX - 1,
-                        BUFFER_PX + tile_size + BUFFER_PX - 1
-                    ]]
-                );
-            }
-
-            save_tile(ctx, tile, img);
+            save_tile(ctx, tile, dem);
         }
     };
 

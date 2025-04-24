@@ -13,11 +13,13 @@ proj = "0.29.0"
 rayon = "1.10.0"
 rusqlite = "0.32.1"
 spade = "2.13.1"
-maptile = { path = "../../maptile" }
+tilemath = "0.1.0"
 zstd = "0.13.3"
-clap = { version = "4.5.36", features = ["derive"] }
+clap = { version = "4.5.37", features = ["derive"] }
 itertools = "0.14.0"
 ndarray = "0.16.1"
+lerc = "0.1.0"
+lru = "0.14.0"
 
 [profile.release]
 panic = "abort"

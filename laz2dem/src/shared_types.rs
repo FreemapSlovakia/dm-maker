@@ -1,6 +1,6 @@
-use maptile::{bbox::BBox, tile::Tile};
 use spade::{HasPosition, Point2};
 use std::{fmt::Debug, path::PathBuf, sync::Mutex};
+use tilemath::{bbox::BBox, tile::Tile};
 
 pub struct PointWithHeight {
     pub position: Point2<f64>,

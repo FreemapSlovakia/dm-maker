@@ -1,12 +1,12 @@
 use crate::shared_types::Source;
 use clap::{ArgGroup, Parser, ValueEnum};
-use maptile::{bbox::BBox, constants::WEB_MERCATOR_EXTENT};
 use std::{
     fmt::{Display, Formatter},
     num::ParseIntError,
     path::PathBuf,
     str::FromStr,
 };
+use tilemath::{bbox::BBox, constants::WEB_MERCATOR_EXTENT};
 
 #[derive(Clone, Debug, Parser, PartialEq)]
 #[clap(group = ArgGroup::new("exclusive").required(true))]
@@ -53,7 +53,7 @@ pub struct Options {
 
 impl Options {
     pub fn pixels_per_meter(&self) -> f64 {
-        (((self.tile_size as u64) << self.zoom_level) as f64) / 2.0 / WEB_MERCATOR_EXTENT
+        ((u64::from(self.tile_size) << self.zoom_level) as f64) / 2.0 / WEB_MERCATOR_EXTENT
     }
 
     pub fn source(&self) -> Source {
@@ -74,7 +74,7 @@ pub enum ExistingFileAction {
     Continue,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rgb(pub image::Rgb<u8>);
 
 impl FromStr for Rgb {
@@ -89,10 +89,10 @@ impl FromStr for Rgb {
     }
 }
 
-#[derive(ValueEnum, Debug, Clone, PartialEq)]
+#[derive(ValueEnum, Debug, Clone, PartialEq, Eq)]
 pub enum Format {
-    JPEG,
-    PNG,
+    Jpeg,
+    Png,
 }
 
 impl Display for Format {
@@ -101,8 +101,8 @@ impl Display for Format {
             formatter,
             "{}",
             match self {
-                Format::JPEG => "jpeg",
-                Format::PNG => "png",
+                Self::Jpeg => "jpeg",
+                Self::Png => "png",
             }
         )
     }

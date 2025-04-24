@@ -1,10 +1,9 @@
+use itertools::iproduct;
 use std::{
     collections::{HashMap, HashSet},
     time::{Duration, SystemTime},
 };
-
-use itertools::iproduct;
-use maptile::tile::Tile;
+use tilemath::tile::Tile;
 
 use crate::shared_types::Job;
 
@@ -40,7 +39,7 @@ impl Progress {
         let mut next: HashSet<_> = states.keys().copied().collect();
 
         loop {
-            next = next.iter().filter_map(|tile| tile.parent()).collect();
+            next = next.iter().filter_map(Tile::parent).collect();
 
             if next.is_empty() {
                 break;
@@ -85,7 +84,7 @@ impl Progress {
             return;
         };
 
-        let sector = tile.sector_in_parent(1);
+        let sector = tile.sector_in_ancestor(1);
 
         let dx = parent.x + sector.0 - 1;
 
