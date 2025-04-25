@@ -47,8 +47,13 @@ pub struct Options {
     #[clap(long, default_value_t = 40)]
     pub buffer: u32,
 
+    /// action to take if output file exists
     #[clap(long, value_enum)]
     pub existing_file_action: Option<ExistingFileAction>,
+
+    /// LRU cache size
+    #[clap(long, default_value_t = 4096)]
+    pub lru_size: usize,
 }
 
 impl Options {

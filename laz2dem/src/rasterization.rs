@@ -39,8 +39,6 @@ struct Resize {
 pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
     let output = &options.output;
 
-    let conn = Connection::open(output).unwrap();
-
     {
         let proj_3857_to_4326 = Proj::new_known_crs("EPSG:3857", "EPSG:4326", None)
             .expect("Failed to create PROJ transformation");
@@ -53,6 +51,8 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
         proj_3857_to_4326.project_array(&mut bounds, false).unwrap();
 
         if !r#continue {
+            let conn = Connection::open(output).unwrap();
+
             create_schema(
                 &conn,
                 &[
@@ -65,11 +65,7 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
         }
     }
 
-    conn.pragma_update(None, "synchronous", "OFF").unwrap();
-
-    conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-
-    let conn = Arc::new(Mutex::new(conn));
+    // let conn = Arc::new(Mutex::new(conn));
 
     let progress = Arc::new(Mutex::new(Progress::new(
         jobs,
@@ -90,19 +86,25 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
         let jobs_len = progress.lock().unwrap().jobs.len();
 
         let for_overviews = Arc::new(Mutex::new(LruCache::<Tile, Array2<f64>>::new(
-            NonZero::new(4096).unwrap(), // TODO configurable
+            NonZero::new(options.lru_size).unwrap(),
         )));
 
         for _ in 0..(jobs_len.min(available_parallelism().unwrap().get())) {
             let progress = Arc::clone(&progress);
 
-            let conn = Arc::clone(&conn);
+            // let conn = Arc::clone(&conn);
 
             let for_overviews = Arc::clone(&for_overviews);
 
             let laztile_conn = laztile_conn.clone();
 
             scope.spawn(move || {
+                let conn = Connection::open(output).unwrap();
+
+                conn.pragma_update(None, "synchronous", "OFF").unwrap();
+
+                conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+
                 let ctx = Context {
                     progress,
                     options,
@@ -127,35 +129,35 @@ struct Context<'a> {
     r#continue: bool,
     supertile_zoom_offset: u8,
     for_overviews: Arc<Mutex<LruCache<Tile, Array2<f64>>>>,
-    conn: Arc<Mutex<Connection>>,
+    conn: Connection,
     laztile_conn: Option<Arc<Mutex<Connection>>>,
 }
 
 fn save_tile<'a>(ctx: &Context<'a>, tile: Tile, dem: Array2<f64>) {
-    // let r = lerc::encode(
-    //     dem.as_slice().unwrap(),
-    //     None,
-    //     dem.ncols(),
-    //     dem.nrows(),
-    //     1,
-    //     1,
-    //     0,
-    //     (0.0005 * (1 << (20 - tile.zoom)) as f64).max(0.001),
-    // )
-    // .unwrap();
+    let dem32: Vec<_> = dem.as_slice().unwrap().iter().map(|v| *v as f32).collect();
 
-    let r: Vec<_> = dem
-        .as_slice()
-        .unwrap()
-        .into_iter()
-        .flat_map(|v| (*v as f32).to_le_bytes().into_iter())
-        .collect();
+    let r = lerc::encode(
+        &dem32[..],
+        None,
+        dem.ncols(),
+        dem.nrows(),
+        1,
+        1,
+        0,
+        0.0, //(0.0005 * (1 << (20 - tile.zoom)) as f64).max(0.001),
+    )
+    .unwrap();
+
+    // let r: Vec<_> = dem32
+    //     .into_iter()
+    //     .flat_map(|v| v.to_le_bytes().into_iter())
+    //     .collect();
 
     let buffer = zstd::encode_all(Cursor::new(r), 0).unwrap();
 
     ctx.for_overviews.lock().unwrap().put(tile, dem);
 
-    let res = ctx.conn.lock().unwrap().execute(
+    let res = ctx.conn.execute(
         INSERT_TILE_SQL,
         (tile.zoom, tile.x, tile.reversed_y(), buffer),
     );
@@ -192,9 +194,7 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
             Job::Overview(tile) => (tile, vec![tile]),
         };
 
-        let conn = ctx.conn.lock().unwrap();
-
-        let mut stmt = conn.prepare(SELECT_TILE_EXISTS_SQL).unwrap();
+        let mut stmt = ctx.conn.prepare(SELECT_TILE_EXISTS_SQL).unwrap();
 
         let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
 
@@ -358,9 +358,7 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                     .collect();
 
                 {
-                    let conn = ctx.conn.lock().unwrap();
-
-                    let mut stmt = conn.prepare(&sql).unwrap();
+                    let mut stmt = ctx.conn.prepare(&sql).unwrap();
 
                     stmt.query_map(&flat_refs[..], |row| {
                         let zoom = row.get(1)?;
