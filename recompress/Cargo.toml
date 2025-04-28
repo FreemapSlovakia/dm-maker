@@ -1,0 +1,10 @@
+[package]
+name = "recompress"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossbeam = "0.8.4"
+lerc = "0.1.0"
+rusqlite = "0.35.0"
+zstd = "0.13.3"
