@@ -7,7 +7,7 @@ use crate::{
 };
 use core::f64;
 use itertools::{Either, Itertools};
-use las::Reader;
+use las::{Reader, point::Classification};
 use lru::LruCache;
 use ndarray::{Array2, s};
 use proj::Proj;
@@ -16,7 +16,10 @@ use spade::{DelaunayTriangulation, Point2, Triangulation};
 use std::{
     io::Cursor,
     num::NonZero,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        mpsc::{SyncSender, sync_channel},
+    },
     thread::{self, available_parallelism},
 };
 use tilemath::tile::Tile;
@@ -56,7 +59,7 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
             create_schema(
                 &conn,
                 &[
-                    ("format", "application/x-zstd-f16-grid"),
+                    ("format", "application/x-dem-grid-f16-lerc-zstd"),
                     ("minzoom", "0"),
                     ("maxzoom", options.zoom_level.to_string().as_ref()),
                 ],
@@ -89,6 +92,38 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
             NonZero::new(options.lru_size).unwrap(),
         )));
 
+        let (tx, rx) = sync_channel::<(Tile, Vec<u8>)>((options.lru_size - 100).min(1024));
+
+        scope.spawn(move || {
+            let conn = Connection::open(output).unwrap();
+
+            conn.pragma_update(None, "synchronous", "OFF").unwrap();
+
+            conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+
+            loop {
+                let Ok((tile, buffer)) = rx.recv() else {
+                    return;
+                };
+
+                let res = conn.execute(
+                    INSERT_TILE_SQL,
+                    (tile.zoom, tile.x, tile.reversed_y(), buffer),
+                );
+
+                match res {
+                    Err(Error::SqliteFailure(ref err, _))
+                        if err.code == ErrorCode::ConstraintViolation =>
+                    {
+                        println!("DUPLICATE {}", tile);
+                    }
+                    _ => {
+                        res.unwrap();
+                    }
+                }
+            }
+        });
+
         for _ in 0..(jobs_len.min(available_parallelism().unwrap().get())) {
             let progress = Arc::clone(&progress);
 
@@ -98,21 +133,19 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
 
             let laztile_conn = laztile_conn.clone();
 
+            let tx = tx.clone();
+
             scope.spawn(move || {
-                let conn = Connection::open(output).unwrap();
-
-                conn.pragma_update(None, "synchronous", "OFF").unwrap();
-
-                conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-
                 let ctx = Context {
                     progress,
                     options,
                     r#continue,
                     supertile_zoom_offset,
                     for_overviews,
-                    conn,
+                    tx,
                     laztile_conn,
+                    conn: Connection::open_with_flags(output, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                        .unwrap(),
                 };
 
                 while process_single(&ctx) {}
@@ -129,8 +162,9 @@ struct Context<'a> {
     r#continue: bool,
     supertile_zoom_offset: u8,
     for_overviews: Arc<Mutex<LruCache<Tile, Array2<f64>>>>,
-    conn: Connection,
+    tx: SyncSender<(Tile, Vec<u8>)>,
     laztile_conn: Option<Arc<Mutex<Connection>>>,
+    conn: Connection,
 }
 
 fn save_tile<'a>(ctx: &Context<'a>, tile: Tile, dem: Array2<f64>) {
@@ -144,7 +178,7 @@ fn save_tile<'a>(ctx: &Context<'a>, tile: Tile, dem: Array2<f64>) {
         1,
         1,
         0,
-        0.0, //(0.0005 * (1 << (20 - tile.zoom)) as f64).max(0.001),
+        2_f64.powf((20.0 - tile.zoom as f64) / 1.5) / 20.0,
     )
     .unwrap();
 
@@ -157,19 +191,7 @@ fn save_tile<'a>(ctx: &Context<'a>, tile: Tile, dem: Array2<f64>) {
 
     ctx.for_overviews.lock().unwrap().put(tile, dem);
 
-    let res = ctx.conn.execute(
-        INSERT_TILE_SQL,
-        (tile.zoom, tile.x, tile.reversed_y(), buffer),
-    );
-
-    match res {
-        Err(Error::SqliteFailure(ref err, _)) if err.code == ErrorCode::ConstraintViolation => {
-            println!("DUPLICATE");
-        }
-        _ => {
-            res.unwrap();
-        }
-    }
+    ctx.tx.send((tile, buffer)).unwrap();
 
     ctx.progress.lock().unwrap().done(tile);
 }
@@ -238,12 +260,18 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
 
                     points
                         .into_iter()
-                        .map(|point| PointWithHeight {
-                            position: Point2 {
-                                x: point.x,
-                                y: point.y,
-                            },
-                            height: point.z,
+                        .filter_map(|point| {
+                            if point.classification == Classification::Water {
+                                None
+                            } else {
+                                Some(PointWithHeight {
+                                    position: Point2 {
+                                        x: point.x,
+                                        y: point.y,
+                                    },
+                                    height: point.z,
+                                })
+                            }
                         })
                         .collect()
                 },
@@ -384,20 +412,20 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                         .map(|(sector, _)| {
                             let buf = zstd::decode_all(Cursor::new(row.1)).unwrap();
 
-                            assert_eq!(buf.len() % 4, 0, "buffer length must be multiple of 4");
-
-                            let floats: Vec<f64> = buf
-                                .chunks_exact(4)
-                                .map(|chunk| {
-                                    f64::from(f32::from_le_bytes(chunk.try_into().unwrap()))
-                                })
-                                .collect();
+                            let floats = lerc::decode_auto::<f32>(&buf).unwrap().0;
 
                             let len = floats.len();
                             let dim = (len as f64).sqrt() as usize;
                             assert_eq!(dim * dim, len, "data does not form a square matrix");
 
-                            (*sector, Array2::from_shape_vec((dim, dim), floats).unwrap())
+                            (
+                                *sector,
+                                Array2::from_shape_vec(
+                                    (dim, dim),
+                                    floats.iter().map(|f| f64::from(*f)).collect(),
+                                )
+                                .unwrap(),
+                            )
                         })
                 })
                 .chain(children_with_data)
