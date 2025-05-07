@@ -8,10 +8,10 @@ image = { version = "0.25.6", default-features = false, features = [
   "jpeg",
   "png",
 ] }
-las = { version = "0.9.4", features = ["laz-parallel"] }
-proj = "0.29.0"
+las = { version = "0.9.5", features = ["laz-parallel"] }
+proj = "0.30.0"
 rayon = "1.10.0"
-rusqlite = "0.32.1"
+rusqlite = "0.34.0"
 spade = "2.13.1"
 tilemath = "0.1.0"
 zstd = "0.13.3"
