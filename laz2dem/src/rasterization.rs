@@ -22,7 +22,7 @@ use std::{
     },
     thread::{self, available_parallelism},
 };
-use tilemath::tile::Tile;
+use tilemath::{WEB_MERCATOR_EXTENT, tile::Tile};
 
 const BUFFER_PX: usize = 2;
 
@@ -59,7 +59,7 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
             create_schema(
                 &conn,
                 &[
-                    ("format", "application/x-dem-grid-f16-lerc-zstd"),
+                    ("format", "application/x-fm-dem"),
                     ("minzoom", "0"),
                     ("maxzoom", options.zoom_level.to_string().as_ref()),
                 ],
@@ -168,24 +168,26 @@ struct Context<'a> {
 }
 
 fn save_tile<'a>(ctx: &Context<'a>, tile: Tile, dem: Array2<f64>) {
-    let dem32: Vec<_> = dem.as_slice().unwrap().iter().map(|v| *v as f32).collect();
+    // let r = lerc::encode(
+    //     dem.as_slice().unwrap(),
+    //     None,
+    //     dem.ncols(),
+    //     dem.nrows(),
+    //     1,
+    //     1,
+    //     0,
+    //     2_f64.powf((20.0 - tile.zoom as f64) / 1.5) / 20.0,
+    // )
+    // .unwrap();
 
-    let r = lerc::encode(
-        &dem32[..],
-        None,
-        dem.ncols(),
-        dem.nrows(),
-        1,
-        1,
-        0,
-        2_f64.powf((20.0 - tile.zoom as f64) / 1.5) / 20.0,
-    )
-    .unwrap();
-
-    // let r: Vec<_> = dem32
-    //     .into_iter()
-    //     .flat_map(|v| v.to_le_bytes().into_iter())
-    //     .collect();
+    let r: Vec<_> = dem
+        .as_slice()
+        .unwrap()
+        .iter()
+        .map(|v| *v as f32)
+        .into_iter()
+        .flat_map(|v| v.to_le_bytes().into_iter())
+        .collect();
 
     let buffer = zstd::encode_all(Cursor::new(r), 0).unwrap();
 
@@ -206,6 +208,9 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
     let options = ctx.options;
 
     // println!("Processing {:?}", job);
+
+    let pixel_size =
+        (2.0 * WEB_MERCATOR_EXTENT) / f64::from((options.tile_size as u32) << options.zoom_level);
 
     if ctx.r#continue {
         let (tile, tiles) = match job {
@@ -261,7 +266,7 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                     points
                         .into_iter()
                         .filter_map(|point| {
-                            if point.classification == Classification::Water {
+                            if point.classification == Classification::LowVegetation {
                                 None
                             } else {
                                 Some(PointWithHeight {
@@ -274,6 +279,43 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                             }
                         })
                         .collect()
+
+                    // with thinning; very slow probably because of `into_group_map_by`
+                    // TODO use Array2<(number, (x, y, z))>
+
+                    // points
+                    //     .into_iter()
+                    //     .filter_map(|point| {
+                    //         if point.classification == Classification::LowVegetation {
+                    //             None
+                    //         } else {
+                    //             Some(point)
+                    //         }
+                    //     })
+                    //     // thinning
+                    //     .into_group_map_by(|point| {
+                    //         ((point.x / pixel_size) as u32, (point.y / pixel_size) as u32)
+                    //     })
+                    //     .into_iter()
+                    //     .map(|(_, points)| {
+                    //         points
+                    //             .iter()
+                    //             .map(|p| (p.x, p.y, p.z))
+                    //             .reduce(|a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2))
+                    //             .map(|(x, y, z)| {
+                    //                 let len = points.len() as f64;
+
+                    //                 PointWithHeight {
+                    //                     position: Point2 {
+                    //                         x: x / len,
+                    //                         y: y / len,
+                    //                     },
+                    //                     height: z / len,
+                    //                 }
+                    //             })
+                    //             .unwrap()
+                    //     })
+                    //     .collect::<Vec<_>>()
                 },
             );
 
@@ -308,7 +350,19 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                     let cx = bbox.min_x + x as f64 * bbox.width() / width_pixels as f64;
 
                     elevations[[height_pixels - y - 1, x]] = natural_neighbor
-                        .interpolate(|v| v.data().height, Point2::new(cx, cy))
+                        .interpolate(
+                            |v| {
+                                // // skip triangle bigger than 50m
+                                // if v.out_edges().any(|e| e.length_2() > 2500.0) {
+                                //     f64::NAN
+                                // } else {
+                                //     v.data().height
+                                // }
+
+                                v.data().height
+                            },
+                            Point2::new(cx, cy),
+                        )
                         .unwrap_or(f64::NAN);
                 }
             }
@@ -412,10 +466,18 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                         .map(|(sector, _)| {
                             let buf = zstd::decode_all(Cursor::new(row.1)).unwrap();
 
-                            let floats = lerc::decode_auto::<f32>(&buf).unwrap().0;
+                            let floats: Vec<_> = buf
+                                .chunks_exact(4)
+                                .into_iter()
+                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                                .collect();
+
+                            // let floats = lerc::decode_auto::<f32>(&buf).unwrap().0;
 
                             let len = floats.len();
+
                             let dim = (len as f64).sqrt() as usize;
+
                             assert_eq!(dim * dim, len, "data does not form a square matrix");
 
                             (
