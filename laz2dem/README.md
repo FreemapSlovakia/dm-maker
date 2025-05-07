@@ -92,4 +92,6 @@ plesivecka - strong default:
 cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox 2272998,6204873,2275153,6205973 test.mbtiles --zoom-level 20 --z-factor 10 --shadings igor,203060FF,60+igor,FFEE00FF,240+igor,000000FF,135 --background-color FFFFFF
 
 SK: nice cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/14TB/sk-new-dmr/laztiles.sqlite --bbox 1867116,6055819,2516236,6386976 /home/martin/14TB/sk-new-dmr/sk.mbtiles --zoom-level 20 --z-factor 5 --shadings igor,5060FF60,135+igor,E0D000B0,315+igor,00000080,135+igor-slope,000000FF --background-color FFFFFF --buffer 50 --existing-file-action continue
+
+SK: nice cargo run --release -- --unit-zoom-level 16 --laz-tile-db /home/martin/18TB/laztiles2.sqlite --bbox 1867116,6055819,2516236,6386976 /home/martin/14TB/sk-new-dmr/sk.mbtiles --zoom-level 19 --buffer 50 --existing-file-action continue
 ```
