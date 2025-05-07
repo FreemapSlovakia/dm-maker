@@ -94,6 +94,8 @@ fn resize_1d(
         for j in 0..src.len_of(Axis(other_axis)) {
             let mut val = 0.0;
 
+            let mut valid_weight_sum = 0.0;
+
             for &(src_i, weight) in &kernel[out_i] {
                 if src_i >= 0 && (src_i as usize) < in_len {
                     let idx = if axis == Axis(0) {
@@ -102,7 +104,11 @@ fn resize_1d(
                         [j, src_i as usize]
                     };
 
-                    val += weight * src[idx];
+                    if !src[idx].is_nan() {
+                        val += weight * src[idx];
+
+                        valid_weight_sum += weight;
+                    }
                 }
             }
 
@@ -112,7 +118,11 @@ fn resize_1d(
                 [j, out_i]
             };
 
-            dst[idx] = val;
+            dst[idx] = if valid_weight_sum >= 0.5 {
+                val / valid_weight_sum
+            } else {
+                f64::NAN
+            };
         }
     }
 }
