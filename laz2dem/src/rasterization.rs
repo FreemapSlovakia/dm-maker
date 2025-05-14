@@ -320,7 +320,13 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
             );
 
             if points.is_empty() {
-                progress.lock().unwrap().done(tile_meta.tile);
+                for off in 0..=ctx.supertile_zoom_offset {
+                    let tiles = tile_meta.tile.descendants(off);
+
+                    for tile in tiles {
+                        progress.lock().unwrap().done(tile);
+                    }
+                }
 
                 return true;
             }
