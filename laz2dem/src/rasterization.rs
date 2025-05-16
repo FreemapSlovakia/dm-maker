@@ -11,9 +11,10 @@ use las::{Reader, point::Classification};
 use lru::LruCache;
 use ndarray::{Array2, s};
 use proj::Proj;
-use rusqlite::{Connection, Error, ErrorCode, OpenFlags};
+use rusqlite::{Connection, Error, ErrorCode, OpenFlags, params_from_iter};
 use spade::{DelaunayTriangulation, Point2, Triangulation};
 use std::{
+    fs::read_to_string,
     io::Cursor,
     num::NonZero,
     sync::{
@@ -21,6 +22,7 @@ use std::{
         mpsc::{SyncSender, sync_channel},
     },
     thread::{self, available_parallelism},
+    time::Duration,
 };
 use tilemath::{WEB_MERCATOR_EXTENT, tile::Tile};
 
@@ -66,9 +68,22 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
             )
             .unwrap();
         }
-    }
+        // else {
+        //     let conn = Connection::open(output).unwrap();
 
-    // let conn = Arc::new(Mutex::new(conn));
+        //     let tiles: HashSet<Tile> = ["13/4538/2791", "18/144513/89708", "18/144566/89686"]
+        //         .iter()
+        //         .flat_map(|&s| successors(Some(s.parse().unwrap()), Tile::parent))
+        //         .collect();
+
+        //     for tile in tiles {
+        //         conn.execute(
+        //             "DELETE FROM tiles WHERE tile_column = ?1 AND tile_row = ?2 AND zoom_level = ?3",
+        //             (tile.x, tile.reversed_y(), tile.zoom)
+        //         ).unwrap();
+        //     }
+        // }
+    }
 
     let progress = Arc::new(Mutex::new(Progress::new(
         jobs,
@@ -124,7 +139,7 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
             }
         });
 
-        for _ in 0..(jobs_len.min(available_parallelism().unwrap().get())) {
+        for i in 0..(jobs_len.min(available_parallelism().unwrap().get())) {
             let progress = Arc::clone(&progress);
 
             // let conn = Arc::clone(&conn);
@@ -148,7 +163,18 @@ pub fn rasterize(options: &Options, r#continue: bool, jobs: Vec<Job>) {
                         .unwrap(),
                 };
 
-                while process_single(&ctx) {}
+                while process_single(&ctx) {
+                    while let Result::Ok(s) = read_to_string("max_threads") {
+                        match s.trim().parse::<usize>() {
+                            Ok(n) if i > n => {
+                                std::thread::sleep(Duration::from_secs(10));
+                            }
+                            _ => {
+                                break;
+                            }
+                        }
+                    }
+                }
             });
         }
     });
@@ -176,7 +202,7 @@ fn save_tile<'a>(ctx: &Context<'a>, tile: Tile, dem: Array2<f64>) {
     //     1,
     //     1,
     //     0,
-    //     2_f64.powf((20.0 - tile.zoom as f64) / 1.5) / 20.0,
+    //     2_f64.powf((20.0 - tile.zoom as f64) / 1.5) / 150.0,
     // )
     // .unwrap();
 
@@ -221,6 +247,31 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
             Job::Overview(tile) => (tile, vec![tile]),
         };
 
+        let cond = (0..tiles.len())
+            .map(|_| "(zoom_level = ? AND tile_column = ? AND tile_row = ?)")
+            .join(" OR ");
+
+        let cnt =
+            ctx.conn
+                .query_row(
+                    &format!("SELECT COUNT(1) FROM tiles WHERE {cond}"),
+                    params_from_iter(tiles.iter().flat_map(|tile| {
+                        [tile.zoom as u32, tile.x, tile.reversed_y()].into_iter()
+                    })),
+                    |row| row.get::<_, usize>(0),
+                )
+                .unwrap();
+
+        if cnt == tiles.len() {
+            for tile in tiles {
+                progress.lock().unwrap().done(tile);
+
+                // println!("SKIP {tile}");
+            }
+
+            return true;
+        }
+
         let mut stmt = ctx.conn.prepare(SELECT_TILE_EXISTS_SQL).unwrap();
 
         let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
@@ -228,6 +279,8 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
         if rows.next().unwrap().is_some() {
             for tile in tiles {
                 progress.lock().unwrap().done(tile);
+
+                // println!("SKIP {tile}");
             }
 
             return true;
