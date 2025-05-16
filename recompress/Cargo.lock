@@ -20,7 +20,7 @@ dependencies = [
  "bitflags",
  "cexpr",
  "clang-sys",
- "itertools",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -200,6 +200,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "jobserver"
 version = "0.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -330,6 +339,7 @@ dependencies = [
  "crossbeam",
  "lerc",
  "rusqlite",
+ "tilemath",
  "zstd",
 ]
 
@@ -403,6 +413,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tilemath"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d200b3d91d40db573e88eed5c22747e1d1d2af545ba4c5a1276a061335f6f0c"
+dependencies = [
+ "itertools 0.14.0",
 ]
 
 [[package]]

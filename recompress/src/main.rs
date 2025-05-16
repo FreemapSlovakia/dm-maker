@@ -2,16 +2,20 @@ use crossbeam::channel::{Receiver, Sender, bounded};
 use rusqlite::{Connection, OpenFlags, params};
 use std::io::Cursor;
 use std::thread::{self, available_parallelism};
+use tilemath::Tile;
 use zstd::stream::decode_all;
 
-type RawTile = (u8, u32, u32, Vec<u8>);
-type EncodedTile = (u8, u32, u32, Vec<u8>);
+type RawTile = (Tile, Vec<u8>);
+type EncodedTile = (Tile, Vec<u8>);
 
-const OUTPUT_DB: &str = "/home/martin/14TB/sk-new-dmr/sk-dem-f32-lerc-0-zstd.mbtiles";
-const INPUT_DB: &str = "/home/martin/14TB/sk-new-dmr/sk-dem-f32-zstd.mbtiles";
+// const OUTPUT_DB: &str = "/home/martin/14TB/sk-new-dmr/dedinky-lerc.mbtiles";
+const OUTPUT_DB: &str = "/media/martin/OSM/sk-dem-lerc.mbtiles";
+const INPUT_DB: &str = "/home/martin/14TB/sk-new-dmr/sk-w-water.mbtiles";
 
 fn worker(raw_rx: Receiver<RawTile>, enc_tx: Sender<EncodedTile>) {
-    while let Ok((z, x, y, zstd_data)) = raw_rx.recv() {
+    while let Ok((tile, zstd_data)) = raw_rx.recv() {
+        // enc_tx.send((tile, zstd_data)).expect("send encoded tile");
+
         let buf = decode_all(&*zstd_data).expect("zstd decompress");
 
         assert_eq!(buf.len() % 4, 0, "buffer length must be multiple of 4");
@@ -25,11 +29,21 @@ fn worker(raw_rx: Receiver<RawTile>, enc_tx: Sender<EncodedTile>) {
         let dim = (len as f64).sqrt() as usize;
         assert_eq!(dim * dim, len, "data does not form a square matrix");
 
-        let lerc_data = lerc::encode(&floats, None, dim, dim, 1, 1, 0, 0.0).expect("lerc encode");
+        let lerc_data = lerc::encode(
+            &floats,
+            None,
+            dim,
+            dim,
+            1,
+            1,
+            0,
+            2_f64.powf((20.0 - tile.zoom as f64) / 1.5) / 150.0,
+        )
+        .expect("lerc encode");
 
         let buffer = zstd::encode_all(Cursor::new(lerc_data), 0).unwrap();
 
-        enc_tx.send((z, x, y, buffer)).expect("send encoded tile");
+        enc_tx.send((tile, buffer)).expect("send encoded tile");
     }
 }
 
@@ -43,10 +57,10 @@ fn writer(enc_rx: Receiver<EncodedTile>) {
     conn.busy_timeout(std::time::Duration::from_secs(10))
         .unwrap();
 
-    while let Ok((z, x, y, buffer)) = enc_rx.recv() {
+    while let Ok((tile, buffer)) = enc_rx.recv() {
         conn.execute(
             "INSERT INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?1, ?2, ?3, ?4)",
-            params![z, x, y, buffer],
+            params![tile.zoom, tile.x, tile.reversed_y(), buffer],
         ).expect("insert tile");
     }
 }
@@ -88,13 +102,32 @@ fn main() {
         let mut rows = stmt.query([]).unwrap();
 
         while let Some(row) = rows.next().unwrap() {
-            let z: u8 = row.get(0).unwrap();
+            let zoom: u8 = row.get(0).unwrap();
             let x: u32 = row.get(1).unwrap();
             let y: u32 = row.get(2).unwrap();
             let data: Vec<u8> = row.get(3).unwrap();
-            raw_tx.send((z, x, y, data)).unwrap();
+            raw_tx.send((Tile { zoom, x, y }, data)).unwrap();
         }
     }
+
+    // {
+    //     let conn = Connection::open_with_flags(INPUT_DB, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+
+    //     let mut stmt = conn
+    //         .prepare("SELECT tile_data FROM tiles WHERE zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3")
+    //         .unwrap();
+
+    //     for tile in TileIterator::new(19, 291788..=291856, 180331..=180394).pyramid() {
+    //         let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
+
+    //         while let Some(row) = rows.next().unwrap() {
+    //             println!("{tile}");
+
+    //             let data: Vec<u8> = row.get(0).unwrap();
+    //             raw_tx.send((tile, data)).unwrap();
+    //         }
+    //     }
+    // }
 
     drop(raw_tx); // end signal to workers
     drop(enc_tx); // end signal to writer
