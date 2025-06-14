@@ -9,8 +9,9 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use std::{cell::RefCell, path::Path as FsPath};
 use tokio::task::spawn_blocking;
 
-// path to your .mbtiles file
-const DB_PATH: &str = "/home/martin/fm/dm-maker/laz2dem/tilesets/dedinky-dem.mbtiles";
+//const DB_PATH: &str = "/home/martin/14TB/sk-new-dmr/sk-w-water.mbtiles";
+// const DB_PATH: &str = "/home/martin/14TB/sk-new-dmr/dedinky-lerc.mbtiles";
+const DB_PATH: &str = "/home/martin/OSM/sk-dem-lerc.mbtiles";
 
 // thread-local SQLite connection
 thread_local! {

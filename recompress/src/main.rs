@@ -2,7 +2,7 @@ use crossbeam::channel::{Receiver, Sender, bounded};
 use rusqlite::{Connection, OpenFlags, params};
 use std::io::Cursor;
 use std::thread::{self, available_parallelism};
-use tilemath::Tile;
+use tilemath::{Tile, TileIterator};
 use zstd::stream::decode_all;
 
 type RawTile = (Tile, Vec<u8>);
@@ -41,7 +41,7 @@ fn worker(raw_rx: Receiver<RawTile>, enc_tx: Sender<EncodedTile>) {
         )
         .expect("lerc encode");
 
-        let buffer = zstd::encode_all(Cursor::new(lerc_data), 0).unwrap();
+        let buffer = zstd::encode_all(Cursor::new(lerc_data), 16).unwrap();
 
         enc_tx.send((tile, buffer)).expect("send encoded tile");
     }
@@ -58,6 +58,8 @@ fn writer(enc_rx: Receiver<EncodedTile>) {
         .unwrap();
 
     while let Ok((tile, buffer)) = enc_rx.recv() {
+        // println!("INS {tile}");
+
         conn.execute(
             "INSERT INTO tiles (zoom_level, tile_column, tile_row, tile_data) VALUES (?1, ?2, ?3, ?4)",
             params![tile.zoom, tile.x, tile.reversed_y(), buffer],
@@ -66,9 +68,10 @@ fn writer(enc_rx: Receiver<EncodedTile>) {
 }
 
 fn main() {
-    Connection::open(OUTPUT_DB)
-        .unwrap()
-        .execute(
+    {
+        let conn = Connection::open(OUTPUT_DB).unwrap();
+
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS tiles (
                 zoom_level INTEGER,
                 tile_column INTEGER,
@@ -78,6 +81,13 @@ fn main() {
             [],
         )
         .unwrap();
+
+        conn.execute(
+            "CREATE UNIQUE INDEX idx_tiles ON tiles (zoom_level, tile_column, tile_row)",
+            (),
+        )
+        .unwrap();
+    }
 
     let num_workers = available_parallelism().unwrap().get();
 
@@ -92,42 +102,40 @@ fn main() {
 
     thread::spawn(move || writer(enc_rx));
 
-    {
-        let conn = Connection::open_with_flags(INPUT_DB, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-
-        let mut stmt = conn
-            .prepare("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles")
-            .unwrap();
-
-        let mut rows = stmt.query([]).unwrap();
-
-        while let Some(row) = rows.next().unwrap() {
-            let zoom: u8 = row.get(0).unwrap();
-            let x: u32 = row.get(1).unwrap();
-            let y: u32 = row.get(2).unwrap();
-            let data: Vec<u8> = row.get(3).unwrap();
-            raw_tx.send((Tile { zoom, x, y }, data)).unwrap();
-        }
-    }
-
     // {
     //     let conn = Connection::open_with_flags(INPUT_DB, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
 
     //     let mut stmt = conn
-    //         .prepare("SELECT tile_data FROM tiles WHERE zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3")
+    //         .prepare("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles")
     //         .unwrap();
 
-    //     for tile in TileIterator::new(19, 291788..=291856, 180331..=180394).pyramid() {
-    //         let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
+    //     let mut rows = stmt.query([]).unwrap();
 
-    //         while let Some(row) = rows.next().unwrap() {
-    //             println!("{tile}");
-
-    //             let data: Vec<u8> = row.get(0).unwrap();
-    //             raw_tx.send((tile, data)).unwrap();
-    //         }
+    //     while let Some(row) = rows.next().unwrap() {
+    //         let zoom: u8 = row.get(0).unwrap();
+    //         let x: u32 = row.get(1).unwrap();
+    //         let y: u32 = row.get(2).unwrap();
+    //         let data: Vec<u8> = row.get(3).unwrap();
+    //         raw_tx.send((Tile { zoom, x, y }, data)).unwrap();
     //     }
     // }
+
+    {
+        let conn = Connection::open_with_flags(INPUT_DB, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT tile_data FROM tiles WHERE zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3")
+            .unwrap();
+
+        for tile in TileIterator::new(19, 286567..=295056, 178655..=182904).pyramid() {
+            let mut rows = stmt.query((tile.zoom, tile.x, tile.reversed_y())).unwrap();
+
+            while let Some(row) = rows.next().unwrap() {
+                let data: Vec<u8> = row.get(0).unwrap();
+                raw_tx.send((tile, data)).unwrap();
+            }
+        }
+    }
 
     drop(raw_tx); // end signal to workers
     drop(enc_tx); // end signal to writer

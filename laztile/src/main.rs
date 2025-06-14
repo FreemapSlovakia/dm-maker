@@ -3,7 +3,6 @@ use las::{
     Builder, Point, Reader, Transform, Vector, Writer,
     point::{Classification, Format},
 };
-use maptile::tile::{Tile, mercator_to_tile_coords};
 use proj::Proj;
 use rusqlite::Connection;
 use std::path::PathBuf;
@@ -14,6 +13,7 @@ use std::{
     sync::{Arc, Mutex},
     thread::{self, available_parallelism},
 };
+use tilemath::tile::{Tile, mercator_to_tile_coords};
 use walkdir::WalkDir;
 
 #[derive(Parser, Debug, PartialEq)]

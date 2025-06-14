@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-las = { version = "0.9.3", features = ["laz-parallel"] }
+las = { version = "0.9.5", features = ["laz-parallel"] }
 proj = "0.29.0"
 rusqlite = "0.32.1"
 walkdir = "2.5.0"
-maptile = { path = "../../maptile" }
-clap = { version = "4.5.32", features = ["derive"] }
+clap = { version = "4.5.40", features = ["derive"] }
+tilemath = "0.3.0"
 
 [profile.release]
 panic = "abort"
