@@ -18,38 +18,53 @@ thread_local! {
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Args {
-    /// Path to the .mbtiles file
-    #[arg(long)]
-    mbtiles: String,
-
-    /// Base URL path (e.g. /tiles)
-    #[arg(long, default_value = "/tiles")]
-    base_path: String,
+    /// Serve MBTiles at a given path, e.g. --mbtiles /tiles:foo.mbtiles
+    #[arg(long, value_parser = parse_mbtiles, num_args = 1.., required = true)]
+    mbtiles: Vec<(String, String)>,
 
     /// Host and port to bind (e.g. 0.0.0.0:3033)
     #[arg(long, default_value = "0.0.0.0:3033")]
     bind: std::net::SocketAddr,
 }
 
+// Parse --mbtiles /tiles:foo.mbtiles into ("/tiles", "foo.mbtiles")
+fn parse_mbtiles(s: &str) -> Result<(String, String), String> {
+    let parts: Vec<_> = s.splitn(2, ':').collect();
+
+    if parts.len() != 2 {
+        return Err("Must be in format /path:mbtiles_file".to_string());
+    }
+
+    Ok((
+        parts[0].trim_end_matches('/').to_string(),
+        parts[1].to_string(),
+    ))
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
 
-    let db_path = args.mbtiles.clone();
+    let mut app = Router::new();
 
-    let route_path = format!("{}/{{z}}/{{x}}/{{y}}", args.base_path.trim_end_matches('/'));
+    for (base_path, db_path) in &args.mbtiles {
+        println!("XXX {}", base_path);
 
-    let db_path_clone = db_path.clone();
+        let route_path = format!("{}/{{z}}/{{x}}/{{y}}", base_path);
 
-    let app = Router::new().route(
-        &route_path,
-        get(move |path| get_tile(path, db_path_clone.clone())),
-    );
+        let db_path = db_path.clone();
+
+        app = app.route(
+            &route_path,
+            get(move |path| get_tile(path, db_path.clone())),
+        );
+    }
 
     let listener = tokio::net::TcpListener::bind(&args.bind).await.unwrap();
 
     axum::serve(listener, app).await.unwrap();
 }
+
 async fn get_tile(Path((z, x, y)): Path<(u32, u32, u32)>, db_path: String) -> Response {
     let tms_y = (1 << z) - 1 - y;
 
