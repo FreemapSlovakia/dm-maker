@@ -194,26 +194,26 @@ struct Context<'a> {
 }
 
 fn save_tile<'a>(ctx: &Context<'a>, tile: Tile, dem: Array2<f64>) {
-    // let r = lerc::encode(
-    //     dem.as_slice().unwrap(),
-    //     None,
-    //     dem.ncols(),
-    //     dem.nrows(),
-    //     1,
-    //     1,
-    //     0,
-    //     2_f64.powf((20.0 - tile.zoom as f64) / 1.5) / 150.0,
-    // )
-    // .unwrap();
+    let r = lerc::encode(
+        dem.mapv(|x| x as f32).as_slice().unwrap(),
+        None,
+        dem.ncols(),
+        dem.nrows(),
+        1,
+        1,
+        0,
+        2_f64.powf((20.0 - tile.zoom as f64) / 1.5) / 150.0,
+    )
+    .expect("error encoding lerc");
 
-    let r: Vec<_> = dem
-        .as_slice()
-        .unwrap()
-        .iter()
-        .map(|v| *v as f32)
-        .into_iter()
-        .flat_map(|v| v.to_le_bytes().into_iter())
-        .collect();
+    // let r: Vec<_> = dem
+    //     .as_slice()
+    //     .unwrap()
+    //     .iter()
+    //     .map(|v| *v as f32)
+    //     .into_iter()
+    //     .flat_map(|v| v.to_le_bytes().into_iter())
+    //     .collect();
 
     let buffer = zstd::encode_all(Cursor::new(r), 0).unwrap();
 
@@ -525,13 +525,15 @@ fn process_single<'a>(ctx: &Context<'a>) -> bool {
                         .map(|(sector, _)| {
                             let buf = zstd::decode_all(Cursor::new(row.1)).unwrap();
 
-                            let floats: Vec<_> = buf
-                                .chunks_exact(4)
-                                .into_iter()
-                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                                .collect();
+                            // let floats: Vec<_> = buf
+                            //     .chunks_exact(4)
+                            //     .into_iter()
+                            //     .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                            //     .collect();
 
-                            // let floats = lerc::decode_auto::<f32>(&buf).unwrap().0;
+                            let floats = lerc::decode_auto::<f32>(&buf)
+                                .expect("error decoding lerc")
+                                .0;
 
                             let len = floats.len();
 
