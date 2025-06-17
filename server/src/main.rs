@@ -48,8 +48,6 @@ async fn main() {
     let mut app = Router::new();
 
     for (base_path, db_path) in &args.mbtiles {
-        println!("XXX {}", base_path);
-
         let route_path = format!("{}/{{z}}/{{x}}/{{y}}", base_path);
 
         let db_path = db_path.clone();
