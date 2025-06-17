@@ -5,16 +5,17 @@ use las::{
 };
 use proj::Proj;
 use rusqlite::Connection;
-use std::path::PathBuf;
 use std::{
     collections::{HashMap, HashSet},
-    io::Cursor,
+    io::{BufReader, Cursor, Read},
     path::Path,
     sync::{Arc, Mutex},
     thread::{self, available_parallelism},
 };
+use std::{fs::File, path::PathBuf};
 use tilemath::tile::{Tile, mercator_to_tile_coords};
 use walkdir::WalkDir;
+use zip::ZipArchive;
 
 #[derive(Parser, Debug, PartialEq)]
 struct Options {
@@ -94,7 +95,7 @@ fn main() {
                         .expect("Failed to create PROJ transformation")
                 });
 
-                loop {
+                'main: loop {
                     if Path::new("STOP").exists() {
                         break;
                     }
@@ -112,7 +113,7 @@ fn main() {
                     if !file
                         .path()
                         .extension()
-                        .map(|ext| ext == "laz")
+                        .map(|ext| ext == "zip")
                         .unwrap_or(false)
                     {
                         continue;
@@ -146,24 +147,48 @@ fn main() {
 
                     println!("START {file_name}");
 
-                    let mut map = HashMap::new();
+                    let reader = BufReader::new(File::open(file.path()).unwrap());
 
-                    let mut reader = Reader::from_path(file.path()).unwrap();
+                    let mut zip = ZipArchive::new(reader).unwrap();
+
+                    let mut f = 'found: {
+                        for i in 0..zip.len() {
+                            let file = zip.by_index(i).unwrap();
+
+                            let name = file.name().to_lowercase();
+
+                            if name.ends_with(".las") || name.ends_with(".laz") {
+                                break 'found file;
+                            }
+                        }
+
+                        eprint!("no laz/las in {}", file.file_name().to_string_lossy());
+
+                        continue 'main;
+                    };
+
+                    let mut buf = Vec::new();
+                    f.read_to_end(&mut buf).unwrap();
+                    let cursor = Cursor::new(buf);
+
+                    let mut reader = Reader::new(cursor).unwrap();
+
+                    let mut map = HashMap::new();
 
                     for point in reader.points() {
                         let point = point.unwrap();
 
-                        if !matches!(
-                            point.classification,
-                            Classification::Ground
-                                | Classification::BridgeDeck
-                                | Classification::Water
-                                | Classification::Building
-                                | Classification::Rail
-                                | Classification::RoadSurface
-                        ) {
-                            continue;
-                        }
+                        // if !matches!(
+                        //     point.classification,
+                        //     Classification::Ground
+                        //         | Classification::BridgeDeck
+                        //         | Classification::Water
+                        //         | Classification::Building
+                        //         | Classification::Rail
+                        //         | Classification::RoadSurface
+                        // ) {
+                        //     continue;
+                        // }
 
                         let (x, y) = proj.as_ref().map_or_else(
                             || (point.x, point.y),
