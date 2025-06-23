@@ -1,12 +1,12 @@
 use crate::shared_types::{Shadings, Source};
 use clap::{ArgGroup, Parser, ValueEnum};
-use maptile::{bbox::BBox, constants::WEB_MERCATOR_EXTENT};
 use std::{
     fmt::{Display, Formatter},
     num::ParseIntError,
     path::PathBuf,
     str::FromStr,
 };
+use tilemath::{bbox::BBox, constants::WEB_MERCATOR_EXTENT};
 
 #[derive(Clone, Debug, Parser, PartialEq)]
 #[clap(group = ArgGroup::new("exclusive").required(true))]

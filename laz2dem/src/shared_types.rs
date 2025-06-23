@@ -1,4 +1,3 @@
-use maptile::{bbox::BBox, tile::Tile};
 use spade::{HasPosition, Point2};
 use std::{
     error::Error,
@@ -7,6 +6,7 @@ use std::{
     str::FromStr,
     sync::Mutex,
 };
+use tilemath::{bbox::BBox, tile::Tile};
 
 pub struct PointWithHeight {
     pub position: Point2<f64>,

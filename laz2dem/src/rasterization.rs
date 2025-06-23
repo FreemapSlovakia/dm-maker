@@ -13,7 +13,6 @@ use image::{
     load_from_memory_with_format,
 };
 use las::Reader;
-use maptile::tile::Tile;
 use proj::Proj;
 use rusqlite::{Connection, Error, ErrorCode, OpenFlags};
 use spade::{DelaunayTriangulation, Point2, Triangulation};
@@ -24,6 +23,7 @@ use std::{
     sync::{Arc, Mutex},
     thread::{self, available_parallelism},
 };
+use tilemath::tile::Tile;
 
 const SELECT_TILE_EXISTS_SQL: &str =
     "SELECT 1 FROM tiles WHERE zoom_level = ?1 AND tile_column = ?2 AND tile_row = ?3";

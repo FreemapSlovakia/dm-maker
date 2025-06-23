@@ -1,11 +1,9 @@
+use crate::shared_types::Job;
 use std::{
     collections::{HashMap, HashSet},
     time::{Duration, SystemTime},
 };
-
-use maptile::tile::Tile;
-
-use crate::shared_types::Job;
+use tilemath::tile::Tile;
 
 enum State {
     Planned,    // no job yet
